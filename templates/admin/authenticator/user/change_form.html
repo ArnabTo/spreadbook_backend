@@ -1,0 +1,182 @@
+{% extends "admin/change_form.html" %}
+
+{% load static %}
+
+{% block extrahead %}
+    {{ block.super }}
+    <script src="{% static 'admin/js/user_admin_enhancements.js' %}"></script>
+    <style>
+        /* Enhanced styling for user admin form */
+        .form-row .field-box {
+            margin-bottom: 15px;
+        }
+        
+        .field-box label {
+            font-weight: 600;
+            color: #374151;
+        }
+        
+        .vTextField, .vEmailField {
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            padding: 8px 12px;
+            font-size: 14px;
+            transition: border-color 0.2s ease;
+        }
+        
+        .vTextField:focus, .vEmailField:focus {
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+            outline: none;
+        }
+        
+        .submit-row {
+            padding: 20px 0;
+            border-top: 1px solid #e5e7eb;
+            margin-top: 20px;
+        }
+        
+        .submit-row input[type="submit"] {
+            background: #059669;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+        }
+        
+        .submit-row input[type="submit"]:hover {
+            background: #047857;
+        }
+        
+        .submit-row .deletelink {
+            background: #dc2626;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            font-weight: 600;
+            text-decoration: none;
+            display: inline-block;
+            transition: background-color 0.2s ease;
+        }
+        
+        .submit-row .deletelink:hover {
+            background: #b91c1c;
+        }
+        
+        /* Enhanced fieldset styling */
+        fieldset.module {
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        
+        fieldset.module h2 {
+            background: #f9fafb;
+            color: #374151;
+            padding: 12px 15px;
+            margin: -1px -1px 0 -1px;
+            border-radius: 7px 7px 0 0;
+            border-bottom: 1px solid #e5e7eb;
+            font-weight: 600;
+        }
+        
+        /* Success messages styling */
+        .messagelist .success {
+            background: #d1fae5;
+            border: 1px solid #059669;
+            color: #047857;
+            border-radius: 6px;
+        }
+        
+        /* Error messages styling */
+        .messagelist .error {
+            background: #fee2e2;
+            border: 1px solid #dc2626;
+            color: #b91c1c;
+            border-radius: 6px;
+        }
+        
+        /* Help text styling */
+        .help {
+            color: #6b7280;
+            font-size: 12px;
+            font-style: italic;
+            margin-top: 4px;
+        }
+        
+        /* Required field indicators */
+        .required label:after {
+            content: " *";
+            color: #dc2626;
+            font-weight: bold;
+        }
+        
+        /* Form section spacing */
+        .form-row {
+            margin-bottom: 15px;
+            padding: 0 10px;
+        }
+        
+        .form-row:last-child {
+            margin-bottom: 0;
+        }
+    </style>
+{% endblock %}
+
+{% block submit_buttons_bottom %}
+    <div class="submit-row">
+        <input type="submit" value="Save user" class="default" name="_save">
+        <input type="submit" value="Save and add another" name="_addanother">
+        <input type="submit" value="Save and continue editing" name="_continue">
+        {% if has_delete_permission and original %}
+            <p class="deletelink-box">
+                <a href="delete/" class="deletelink">Delete</a>
+            </p>
+        {% endif %}
+    </div>
+{% endblock %}
+
+{% block admin_change_form_document_ready %}
+    {{ block.super }}
+    <script>
+        // Additional form enhancements
+        django.jQuery(document).ready(function($) {
+            console.log('Django admin form ready');
+            
+            // Add tooltips for form fields
+            $('label[for="id_role"]').attr('title', 'Select the user role to determine permissions');
+            $('label[for="id_companyId"]').attr('title', 'Choose the company this user belongs to');
+            $('label[for="id_branchAccess"]').attr('title', 'Select which branches this user can access');
+            
+            // Log current form state
+            console.log('Company ID field value:', $('#id_companyId').val());
+            console.log('Branch access field found:', $('#id_branchAccess_from').length > 0);
+            
+            // Auto-focus on first field
+            $('.field-email input').focus();
+            
+            // Add character counter for text fields
+            $('#id_name').after('<small class="char-count" style="color: #6b7280; font-size: 11px;"></small>');
+            $('#id_name').on('input', function() {
+                const count = $(this).val().length;
+                $(this).next('.char-count').text(count > 0 ? count + ' characters' : '');
+            });
+            
+            // Enhanced company field change handler
+            $('#id_companyId').on('change', function() {
+                const companyId = $(this).val();
+                console.log('Company changed to:', companyId, '(via jQuery)');
+                
+                // Visual feedback
+                if (companyId) {
+                    $(this).css('border-color', '#10b981');
+                    setTimeout(() => $(this).css('border-color', ''), 1000);
+                }
+            });
+        });
+    </script>
+{% endblock %}

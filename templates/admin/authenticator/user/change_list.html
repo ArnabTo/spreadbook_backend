@@ -1,0 +1,210 @@
+{% extends "admin/change_list.html" %}
+
+{% block extrahead %}
+    {{ block.super }}
+    <style>
+        /* Enhanced admin list styling */
+        .results table {
+            border-collapse: separate;
+            border-spacing: 0;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        
+        .results th {
+            background: #f9fafb;
+            color: #374151;
+            font-weight: 600;
+            border-bottom: 1px solid #e5e7eb;
+            padding: 12px 8px;
+        }
+        
+        .results td {
+            padding: 10px 8px;
+            border-bottom: 1px solid #f3f4f6;
+        }
+        
+        .results tr:nth-child(even) {
+            background: #fafafa;
+        }
+        
+        .results tr:hover {
+            background: #f0f9ff;
+        }
+        
+        /* Action column styling */
+        .results td:last-child a {
+            margin-right: 4px;
+        }
+        
+        /* Status badges */
+        .results td span[style*="color: #059669"] {
+            background: #d1fae5;
+            color: #047857;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        
+        .results td span[style*="color: #dc2626"] {
+            background: #fee2e2;
+            color: #b91c1c;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        
+        .results td span[style*="color: #2563eb"] {
+            background: #dbeafe;
+            color: #1d4ed8;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        
+        /* Filter sidebar styling */
+        #changelist-filter {
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+        }
+        
+        #changelist-filter h2 {
+            background: #374151;
+            color: white;
+            margin: -1px -1px 0 -1px;
+            padding: 12px 15px;
+            border-radius: 7px 7px 0 0;
+            font-weight: 600;
+        }
+        
+        #changelist-filter h3 {
+            color: #374151;
+            font-weight: 600;
+            margin: 15px 0 8px 0;
+            font-size: 13px;
+        }
+        
+        #changelist-filter ul {
+            margin: 0 0 15px 0;
+        }
+        
+        #changelist-filter li a {
+            color: #6b7280;
+            text-decoration: none;
+            padding: 4px 8px;
+            display: block;
+            border-radius: 4px;
+            transition: background-color 0.2s ease;
+        }
+        
+        #changelist-filter li a:hover {
+            background: #e5e7eb;
+            color: #374151;
+        }
+        
+        #changelist-filter li.selected a {
+            background: #3b82f6;
+            color: white;
+            font-weight: 600;
+        }
+        
+        /* Search bar styling */
+        #toolbar #searchbar {
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            padding: 8px 12px;
+            font-size: 14px;
+        }
+        
+        #toolbar #searchbar:focus {
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+            outline: none;
+        }
+        
+        #toolbar input[type="submit"] {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-left: 8px;
+        }
+        
+        #toolbar input[type="submit"]:hover {
+            background: #2563eb;
+        }
+        
+        /* Pagination styling */
+        .paginator {
+            text-align: center;
+            margin: 20px 0;
+        }
+        
+        .paginator a, .paginator .this-page {
+            display: inline-block;
+            padding: 8px 12px;
+            margin: 0 2px;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            text-decoration: none;
+            color: #374151;
+        }
+        
+        .paginator a:hover {
+            background: #f3f4f6;
+        }
+        
+        .paginator .this-page {
+            background: #3b82f6;
+            color: white;
+            border-color: #3b82f6;
+        }
+    </style>
+{% endblock %}
+
+{% block result_list %}
+    {{ block.super }}
+    <script>
+        // Add JavaScript enhancements for the list view
+        document.addEventListener('DOMContentLoaded', function() {
+            // Add confirmation for bulk delete actions
+            const actionSelect = document.querySelector('select[name="action"]');
+            const goButton = document.querySelector('button[title="Run the selected action"]');
+            
+            if (actionSelect && goButton) {
+                goButton.addEventListener('click', function(e) {
+                    const selectedAction = actionSelect.value;
+                    const checkedItems = document.querySelectorAll('input[name="_selected_action"]:checked');
+                    
+                    if (selectedAction === 'delete_selected' && checkedItems.length > 0) {
+                        const confirmed = confirm(
+                            `Are you sure you want to delete ${checkedItems.length} user(s)? This action cannot be undone.`
+                        );
+                        if (!confirmed) {
+                            e.preventDefault();
+                        }
+                    }
+                });
+            }
+            
+            // Add tooltip for action buttons
+            document.querySelectorAll('.results td:last-child a').forEach(link => {
+                if (link.textContent.includes('Edit')) {
+                    link.title = 'Edit user details';
+                } else if (link.textContent.includes('Password')) {
+                    link.title = 'Change user password';
+                }
+            });
+            
+            console.log('User list enhancements loaded');
+        });
+    </script>
+{% endblock %}
