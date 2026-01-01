@@ -36,4 +36,4 @@ python manage.py runserver
 	lsof -t -i tcp:8000 | xargs kill -9
 
 ## CI/CD
-GitHub Actions is expected to run basic checks and keep secrets in repository/environment secrets.
+GitHub Actions is expected to run basic checks and keep secrets in repository/environment secrets.# apibiz
