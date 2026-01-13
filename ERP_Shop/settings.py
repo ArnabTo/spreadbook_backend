@@ -102,15 +102,15 @@ else:
 # )
 
 if IS_PRODUCTION:
-    ALLOWED_HOSTS = ['*', 'apibiz.hellobiz.net', 'www.apibiz.hellobiz.net']
+    ALLOWED_HOSTS = ['apibiz.hellobiz.net', 'www.apibiz.hellobiz.net']
     # SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     # SESSION_COOKIE_SECURE = True
     # CSRF_COOKIE_SECURE = True
     # SECURE_SSL_REDIRECT = True
     SECURE_PROXY_SSL_HEADER = None
-    SESSION_COOKIE_SECURE = False
-    CSRF_COOKIE_SECURE = False
-    SECURE_SSL_REDIRECT = False
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_SSL_REDIRECT = True
 else:
     ALLOWED_HOSTS = ['*', "192.168.0.101", "192.168.0.15:8000"]
     SESSION_COOKIE_SECURE = False
