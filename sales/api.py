@@ -20,6 +20,7 @@ from rest_framework import generics
 from django.shortcuts import render
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied
+from django.conf import settings
 from datetime import datetime, time, timedelta
 from django.db.models import Count, Sum
 from django.db.models.functions import TruncDate
@@ -29,6 +30,7 @@ from common.drf_scoping import (
     get_company_ids_for_user,
     is_unrestricted_user,
 )
+from common.permissions import IsPOSOperator, IsBranchManagerOrAbove
 
 from .refund_utils import recalculate_sale_is_return
 
@@ -190,6 +192,30 @@ def pos_sales_summary(request):
     )
 
 
+@api_view(["GET"])
+@permission_classes([permissions.IsAuthenticated])
+def pos_settings(request):
+    """Return POS runtime settings used by the frontend.
+
+    Keep this endpoint small and safe: only non-sensitive configuration.
+    """
+
+    try:
+        cash_waiver_max = getattr(settings, "POS_CASH_WAIVER_MAX", Decimal("0"))
+    except Exception:
+        cash_waiver_max = Decimal("0")
+
+    return Response(
+        {
+            "success": True,
+            "data": {
+                "cash_waiver_max": float(cash_waiver_max or 0),
+            },
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
 class SaleViewSet(viewsets.ModelViewSet):
     # queryset = Product.objects.all()
     serializer_class = SaleSerializer
@@ -293,7 +319,7 @@ class POSOrderViewSet(viewsets.ModelViewSet):
 
     queryset = Sale.objects.all()
     serializer_class = POSOrderSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsPOSOperator]
 
     def get_queryset(self):
         """Filter orders based on query parameters"""
@@ -375,9 +401,15 @@ class POSOrderViewSet(viewsets.ModelViewSet):
         """Create new POS order with atomic transaction and retry logic"""
         from django.db import transaction
         import time
+        import logging
+
+        logger = logging.getLogger(__name__)
 
         serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            logger.warning(f"POS Order validation errors: {serializer.errors}")
+            logger.warning(f"POS Order request data: {request.data}")
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         company = None
         branch = None
@@ -696,6 +728,13 @@ class POSOrderViewSet(viewsets.ModelViewSet):
         from django.db import transaction
         from django.db.models import Sum
 
+        # Refunds are sensitive: require manager+ (unless unrestricted).
+        if not (
+            is_unrestricted_user(request.user)
+            or IsBranchManagerOrAbove().has_permission(request, self)
+        ):
+            raise PermissionDenied("Only managers/admins can create refunds")
+
         order = self.get_object()
 
         # Professional guard: only allow refunds for paid orders.
@@ -820,7 +859,7 @@ class POSOrderItemViewSet(viewsets.ModelViewSet):
 
     queryset = InvoiceItem.objects.all()
     serializer_class = POSOrderItemSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsPOSOperator]
 
     def get_queryset(self):
         """Filter items by order if specified"""
@@ -867,7 +906,7 @@ class POSRefundViewSet(viewsets.ModelViewSet):
     """Global refund list (professional view) with scoping + filters."""
 
     queryset = Refund.objects.all()
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsBranchManagerOrAbove]
     http_method_names = ["get", "delete", "head", "options"]
 
     def get_queryset(self):

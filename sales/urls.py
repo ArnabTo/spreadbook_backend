@@ -8,6 +8,7 @@ from .api import (
     POSOrderItemViewSet,
     POSRefundViewSet,
     pos_sales_summary,
+    pos_settings,
 )
 
 
@@ -25,4 +26,5 @@ router.register("api/pos/refunds", POSRefundViewSet, "pos-refunds")
 
 urlpatterns = [
     path("api/pos/sales-summary/", pos_sales_summary, name="pos_sales_summary"),
+    path("api/pos/settings/", pos_settings, name="pos_settings"),
 ] + router.urls

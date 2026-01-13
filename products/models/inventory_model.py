@@ -4,10 +4,21 @@ import uuid
 from suppliers.models import Supplier
 from .product_model import Product
 from .unit_model import Unit
+from company.models import Company, Branch
 
 
 class InventoryCategory(models.Model):
     """Inventory categories for better organization"""
+
+    # Multi-tenant scoping (MegaShop/SaaS)
+    companyId = models.ForeignKey(
+        Company,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_index=True,
+        related_name="inventory_categories",
+    )
 
     name = models.CharField(max_length=100, unique=True)
     description = models.TextField(blank=True, null=True)
@@ -29,7 +40,32 @@ class InventoryItem(models.Model):
 
     # Basic Information
     name = models.CharField(max_length=200)
-    category = models.ForeignKey(InventoryCategory, on_delete=models.CASCADE)
+
+    # Multi-tenant scoping (MegaShop/SaaS)
+    companyId = models.ForeignKey(
+        Company,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_index=True,
+        related_name="inventory_items",
+    )
+    branch = models.ForeignKey(
+        Branch,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_index=True,
+        related_name="inventory_items",
+    )
+
+    # Category can be optional to match the frontend "No Category" selection.
+    category = models.ForeignKey(
+        InventoryCategory,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
     unit = models.ForeignKey(Unit, on_delete=models.CASCADE)
 
     # Stock Information

@@ -4,6 +4,8 @@ from django.utils import timezone
 
 from rest_framework.permissions import BasePermission
 
+from common.drf_scoping import is_unrestricted_user
+
 
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
@@ -79,3 +81,46 @@ class SubscriptionActivePermission(BasePermission):
             return int(days_overdue) < grace_days
 
         return False
+
+
+def _user_role(user) -> str:
+    return (getattr(user, "role", "") or "").strip().lower()
+
+
+class RoleRequiredPermission(BasePermission):
+    """Base role permission.
+
+    - Always allows unrestricted users (software_owner / superuser).
+    - Otherwise requires request.user.role to be in allowed_roles.
+    """
+
+    allowed_roles: frozenset[str] = frozenset()
+    message = "You do not have permission to perform this action."
+
+    def has_permission(self, request, view):
+        user = getattr(request, "user", None)
+        if not user or not getattr(user, "is_authenticated", False):
+            return False
+        if is_unrestricted_user(user) or bool(getattr(user, "is_superuser", False)):
+            return True
+        return _user_role(user) in self.allowed_roles
+
+
+class IsCompanyAdmin(RoleRequiredPermission):
+    """Company admin-ish roles (no cashier/staff)."""
+
+    allowed_roles = frozenset({"super_admin", "admin"})
+
+
+class IsBranchManagerOrAbove(RoleRequiredPermission):
+    """Branch manager + admins + software owner."""
+
+    allowed_roles = frozenset({"manager", "super_admin", "admin", "software_owner"})
+
+
+class IsPOSOperator(RoleRequiredPermission):
+    """Roles allowed to operate POS endpoints."""
+
+    allowed_roles = frozenset(
+        {"cashier", "manager", "super_admin", "admin", "software_owner"}
+    )

@@ -104,6 +104,38 @@ class POSOrderAPITest(TestCase):
             places=2,
         )
 
+    def test_create_pos_order_cash_received_is_quantized(self):
+        """POS cash fields should accept high-precision floats and be rounded to 2dp."""
+        order_data = {
+            "order_type": "dine-in",
+            "table_number": "5",
+            "payment_method": "cash",
+            "currency": "BDT",
+            "tax_rate": 0.0,
+            "cash_received": 100.1299,
+            "change_amount": 0.0049,
+            "items": [
+                {
+                    "id": "menu-item-1",
+                    "name": "Burger",
+                    "price": 10.00,
+                    "quantity": 1,
+                    "category": "main-course",
+                    "preparation_time": 15,
+                }
+            ],
+        }
+
+        response = self.client.post("/api/pos/orders/", order_data, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        order = Sale.objects.filter(order_number__isnull=False).order_by("-id").first()
+        self.assertIsNotNone(order)
+
+        # Cash info is appended to notes in POSOrderCreateSerializer.
+        self.assertIn("Cash Received: 100.13", order.notes)
+        self.assertIn("Change: 0.00", order.notes)
+
     def test_refund_paid_pos_order_partial(self):
         """Test creating a partial refund for a paid POS order."""
         order_data = {

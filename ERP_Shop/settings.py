@@ -16,6 +16,17 @@ from pathlib import Path
 from dotenv import load_dotenv
 from datetime import timedelta
 
+_env_name = (
+    os.environ.get("DJANGO_ENVIRONMENT")
+    or os.environ.get("DJANGO_ENV")
+    or os.environ.get("ENVIRONMENT")
+    or "development"
+)
+
+_env_name = _env_name.strip().lower()
+ENVIRONMENT = "production" if _env_name in {"production", "prod"} else "development"
+IS_PRODUCTION = ENVIRONMENT == "production"
+
 
 def _env_bool(value: str | None, default: bool = False) -> bool:
     if value is None:
@@ -29,7 +40,21 @@ def _env_csv(value: str | None, default: list[str] | None = None) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-load_dotenv()  # take environment variables from .env (dev/local convenience)
+def _env_decimal(value: str | None, default: str = "0"):
+    from decimal import Decimal
+
+    if value is None:
+        return Decimal(default)
+    try:
+        return Decimal(value.strip())
+    except Exception:
+        return Decimal(default)
+
+
+# take environment variables from .env (dev/local convenience)
+# In production, prefer real environment variables / secret manager.
+if not IS_PRODUCTION and _env_bool(os.getenv("DJANGO_LOAD_DOTENV"), default=True):
+    load_dotenv()
 # This is defined here as a do-nothing function because we can't import
 # django.utils.translation -- that module depends on the settings.
 
@@ -49,7 +74,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/4.1/howto/deployment/checklist/
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = _env_bool(os.getenv("DJANGO_DEBUG") or os.getenv("DEBUG"), default=True)
+DEBUG = _env_bool(
+    os.getenv("DJANGO_DEBUG") or os.getenv("DEBUG"),
+    default=(not IS_PRODUCTION),
+)
 
 # Dev/demo mode: disable authentication/permissions entirely.
 # IMPORTANT: Do not enable this in production.
@@ -60,7 +88,7 @@ _secret_key_env = os.getenv("DJANGO_SECRET_KEY") or os.getenv("SECRET_KEY")
 if _secret_key_env:
     SECRET_KEY = _secret_key_env
 else:
-    if DEBUG:
+    if not IS_PRODUCTION:
         # Dev fallback only; production must provide DJANGO_SECRET_KEY.
         SECRET_KEY = "dev-insecure-secret-key-change-me"
     else:
@@ -68,43 +96,69 @@ else:
             "DJANGO_SECRET_KEY must be set when DEBUG is False (refusing to start with an insecure default)."
         )
 
-ALLOWED_HOSTS = _env_csv(
-    os.getenv("DJANGO_ALLOWED_HOSTS") or os.getenv("ALLOWED_HOSTS"),
-    default=["localhost", "127.0.0.1"],
-)
+# ALLOWED_HOSTS = _env_csv(
+#     os.getenv("DJANGO_ALLOWED_HOSTS") or os.getenv("ALLOWED_HOSTS"),
+#     default=([] if IS_PRODUCTION else ["localhost", "127.0.0.1"]),
+# )
+
+if IS_PRODUCTION:
+    ALLOWED_HOSTS = ['*', 'apibiz.hellobiz.net', 'www.apibiz.hellobiz.net']
+    # SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    # SESSION_COOKIE_SECURE = True
+    # CSRF_COOKIE_SECURE = True
+    # SECURE_SSL_REDIRECT = True
+    SECURE_PROXY_SSL_HEADER = None
+    SESSION_COOKIE_SECURE = False
+    CSRF_COOKIE_SECURE = False
+    SECURE_SSL_REDIRECT = False
+else:
+    ALLOWED_HOSTS = ['*', "192.168.0.101", "192.168.0.15:8000"]
+    SESSION_COOKIE_SECURE = False
+    CSRF_COOKIE_SECURE = False
+    SECURE_SSL_REDIRECT = False
+
+if IS_PRODUCTION and not ALLOWED_HOSTS:
+    raise RuntimeError(
+        "DJANGO_ALLOWED_HOSTS must be set in production (comma-separated hostnames)."
+    )
 
 # Trust proxy SSL header when deployed behind a reverse proxy.
-SECURE_PROXY_SSL_HEADER = (
-    ("HTTP_X_FORWARDED_PROTO", "https")
-    if _env_bool(os.getenv("DJANGO_USE_X_FORWARDED_PROTO"), default=False)
-    else None
-)
+# SECURE_PROXY_SSL_HEADER = (
+#     ("HTTP_X_FORWARDED_PROTO", "https")
+#     if _env_bool(os.getenv("DJANGO_USE_X_FORWARDED_PROTO"), default=False)
+#     else None
+# )
 
 # Cookie + HTTPS security (defaults are safe for dev; tighten for prod)
-SESSION_COOKIE_SECURE = _env_bool(
-    os.getenv("DJANGO_SESSION_COOKIE_SECURE"), default=not DEBUG
-)
-CSRF_COOKIE_SECURE = _env_bool(
-    os.getenv("DJANGO_CSRF_COOKIE_SECURE"), default=not DEBUG
-)
-SECURE_SSL_REDIRECT = _env_bool(
-    os.getenv("DJANGO_SECURE_SSL_REDIRECT"), default=not DEBUG
-)
+# SESSION_COOKIE_SECURE = _env_bool(
+#     os.getenv("DJANGO_SESSION_COOKIE_SECURE"), default=IS_PRODUCTION
+# )
+# CSRF_COOKIE_SECURE = _env_bool(
+#     os.getenv("DJANGO_CSRF_COOKIE_SECURE"), default=IS_PRODUCTION
+# )
+# SECURE_SSL_REDIRECT = _env_bool(
+#     os.getenv("DJANGO_SECURE_SSL_REDIRECT"), default=IS_PRODUCTION
+# )
 
-SECURE_HSTS_SECONDS = int(
-    os.getenv("DJANGO_SECURE_HSTS_SECONDS") or ("31536000" if not DEBUG else "0")
-)
-SECURE_HSTS_INCLUDE_SUBDOMAINS = _env_bool(
-    os.getenv("DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS"), default=not DEBUG
-)
-SECURE_HSTS_PRELOAD = _env_bool(
-    os.getenv("DJANGO_SECURE_HSTS_PRELOAD"), default=not DEBUG
-)
-SECURE_CONTENT_TYPE_NOSNIFF = _env_bool(
-    os.getenv("DJANGO_SECURE_CONTENT_TYPE_NOSNIFF"), default=True
-)
-SECURE_REFERRER_POLICY = os.getenv("DJANGO_SECURE_REFERRER_POLICY") or "same-origin"
-X_FRAME_OPTIONS = os.getenv("DJANGO_X_FRAME_OPTIONS") or "DENY"
+# SECURE_HSTS_SECONDS = int(
+#     os.getenv("DJANGO_SECURE_HSTS_SECONDS") or ("31536000" if IS_PRODUCTION else "0")
+# )
+# SECURE_HSTS_INCLUDE_SUBDOMAINS = _env_bool(
+#     os.getenv("DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS"), default=IS_PRODUCTION
+# )
+# SECURE_HSTS_PRELOAD = _env_bool(
+#     os.getenv("DJANGO_SECURE_HSTS_PRELOAD"), default=IS_PRODUCTION
+# )
+# SECURE_CONTENT_TYPE_NOSNIFF = _env_bool(
+#     os.getenv("DJANGO_SECURE_CONTENT_TYPE_NOSNIFF"), default=True
+# )
+# SECURE_REFERRER_POLICY = os.getenv("DJANGO_SECURE_REFERRER_POLICY") or "same-origin"
+# X_FRAME_OPTIONS = os.getenv("DJANGO_X_FRAME_OPTIONS") or "DENY"
+
+# POS configuration
+# Maximum allowed cash short waiver for cash payments (in currency units, e.g., BDT).
+# Example: POS_CASH_WAIVER_MAX=10
+POS_CASH_WAIVER_MAX = _env_decimal(os.getenv("POS_CASH_WAIVER_MAX"), default="10")
 
 # Additional security headers/policies
 SECURE_CROSS_ORIGIN_OPENER_POLICY = (
@@ -129,20 +183,34 @@ CORS_ALLOW_CREDENTIALS = _env_bool(
 # the "only OPTIONS requests" symptom when the frontend origin doesn't exactly match.
 CORS_ALLOW_ALL_ORIGINS = _env_bool(
     os.getenv("DJANGO_CORS_ALLOW_ALL"),
-    default=DEBUG,
+    default=(not IS_PRODUCTION),
 )
 CORS_ORIGIN_ALLOW_ALL = CORS_ALLOW_ALL_ORIGINS
 
-_default_cors = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-]
+_default_cors = (
+    [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+    if not IS_PRODUCTION
+    else []
+)
 CORS_ALLOWED_ORIGINS = _env_csv(
     os.getenv("DJANGO_CORS_ALLOWED_ORIGINS"), default=_default_cors
 )
 CSRF_TRUSTED_ORIGINS = _env_csv(os.getenv("DJANGO_CSRF_TRUSTED_ORIGINS"), default=[])
+
+# Convenience: In production, if CSRF trusted origins aren't explicitly provided,
+# default them from the CORS allowed origins.
+# Django expects scheme+host (e.g. https://example.com).
+if IS_PRODUCTION and not CSRF_TRUSTED_ORIGINS and not CORS_ALLOW_ALL_ORIGINS:
+    CSRF_TRUSTED_ORIGINS = [
+        origin
+        for origin in CORS_ALLOWED_ORIGINS
+        if origin.startswith("https://") or origin.startswith("http://")
+    ]
 SITE_ID = 1
 
 # Application definition
@@ -348,7 +416,9 @@ if _database_url:
         "default": dj_database_url.config(
             default=_database_url,
             conn_max_age=int(os.getenv("DJANGO_DB_CONN_MAX_AGE") or 60),
-            ssl_require=_env_bool(os.getenv("DJANGO_DB_SSL_REQUIRE"), default=not DEBUG),
+            ssl_require=_env_bool(
+                os.getenv("DJANGO_DB_SSL_REQUIRE"), default=not DEBUG
+            ),
         )
     }
 else:

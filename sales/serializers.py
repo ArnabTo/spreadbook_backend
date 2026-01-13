@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from djoser.serializers import UserCreateSerializer
 from django.contrib.auth import get_user_model
 from products.models.product_model import Product
@@ -16,6 +16,32 @@ from common.drf_scoping import (
 )
 
 User = get_user_model()
+
+
+class QuantizedDecimalField(serializers.DecimalField):
+    """A DecimalField that rounds/quantizes incoming values before validation.
+
+    This prevents 400s when clients send floats like 4599.7106 for a 2dp field.
+    """
+
+    def to_internal_value(self, data):
+        if data is None or data == "":
+            # Let DRF handle allow_null/required rules.
+            return super().to_internal_value(data)
+
+        try:
+            dec = Decimal(str(data))
+        except (InvalidOperation, ValueError, TypeError):
+            return super().to_internal_value(data)
+
+        quant = Decimal("1").scaleb(-int(self.decimal_places or 0))
+        try:
+            dec = dec.quantize(quant, rounding=ROUND_HALF_UP)
+        except (InvalidOperation, ValueError):
+            return super().to_internal_value(data)
+
+        # Pass a normalized value back through DecimalField for max_digits checks.
+        return super().to_internal_value(str(dec))
 
 
 def _get_product_for_invoice_item(obj: InvoiceItem | None):
@@ -507,10 +533,26 @@ class POSOrderSerializer(serializers.ModelSerializer):
         )
 
 
+# Mapping of frontend order types to backend order types
+ORDER_TYPE_MAPPING = {
+    # Frontend format → Backend format (normalized lowercase)
+    "In-Store": "In-Store",
+    "in-store": "In-Store",
+    "Pickup": "takeaway",
+    "pickup": "takeaway",
+    "Delivery": "delivery",
+    "delivery": "delivery",
+    # Also accept backend format directly
+    "dine-in": "dine-in",
+    "takeaway": "takeaway",
+}
+
+
 class POSOrderCreateSerializer(serializers.Serializer):
     """Simplified serializer for creating POS orders from frontend"""
 
-    order_type = serializers.ChoiceField(choices=["dine-in", "takeaway", "delivery"])
+    # Accept both frontend and backend order_type formats
+    order_type = serializers.CharField(max_length=20)
     table_number = serializers.CharField(
         max_length=50, required=False, allow_blank=True
     )
@@ -528,11 +570,34 @@ class POSOrderCreateSerializer(serializers.Serializer):
         required=False, allow_blank=True, allow_null=True
     )
 
+    # Allow creating orders even if inventory is insufficient.
+    # This is intended for inventory mismatch / new items scenarios.
+    # Backend still enforces that only privileged roles can enable this.
+    allow_out_of_stock = serializers.BooleanField(required=False, default=False)
+
+    def validate_order_type(self, value):
+        """Normalize order_type from frontend format to backend format"""
+        if not value:
+            raise serializers.ValidationError("Order type is required")
+
+        normalized = ORDER_TYPE_MAPPING.get(value)
+        if normalized is None:
+            allowed = list(set(ORDER_TYPE_MAPPING.keys()))
+            raise serializers.ValidationError(
+                f"Invalid order type '{value}'. Allowed values: {', '.join(sorted(allowed))}"
+            )
+        return normalized
+
     # Cash payment tracking fields
-    cash_received = serializers.DecimalField(
+    cash_received = QuantizedDecimalField(
         max_digits=10, decimal_places=2, required=False, allow_null=True
     )
-    change_amount = serializers.DecimalField(
+    change_amount = QuantizedDecimalField(
+        max_digits=10, decimal_places=2, required=False, allow_null=True
+    )
+
+    # Cash short waiver (allowed short amount for cash payments)
+    cash_waiver = QuantizedDecimalField(
         max_digits=10, decimal_places=2, required=False, allow_null=True
     )
 
@@ -595,6 +660,58 @@ class POSOrderCreateSerializer(serializers.Serializer):
 
         return items
 
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+
+        payment_method = (attrs.get("payment_method") or "").lower()
+        cash_received = attrs.get("cash_received")
+        change_amount = attrs.get("change_amount")
+        cash_waiver = attrs.get("cash_waiver")
+
+        # Normalize waiver
+        if cash_waiver is not None and cash_waiver < 0:
+            raise serializers.ValidationError({"cash_waiver": "Must be 0 or greater"})
+
+        # Only meaningful for cash payments.
+        if payment_method != "cash":
+            if cash_waiver not in (None, 0, 0.0):
+                raise serializers.ValidationError(
+                    {"cash_waiver": "Only allowed for cash payments"}
+                )
+            return attrs
+
+        # For cash: validate waiver does not exceed configured max.
+        from django.conf import settings
+
+        max_waiver = getattr(settings, "POS_CASH_WAIVER_MAX", Decimal("0"))
+        try:
+            max_waiver = Decimal(str(max_waiver))
+        except Exception:
+            max_waiver = Decimal("0")
+
+        if cash_waiver is not None and cash_waiver > max_waiver:
+            raise serializers.ValidationError(
+                {"cash_waiver": f"Must be \u2264 {max_waiver} (POS_CASH_WAIVER_MAX)"}
+            )
+
+        # If cash_received is provided, waiver cannot exceed the short amount.
+        # Note: order total is computed server-side; frontend-provided totals are not trusted.
+        if cash_received is not None:
+            # We can't compute the total here (depends on items/promo/tax), so we do a sanity check
+            # based on provided change_amount when present.
+            if change_amount is not None:
+                # If change is negative, it represents short amount (or mismatch)
+                if (
+                    change_amount < 0
+                    and cash_waiver is not None
+                    and cash_waiver > (-change_amount)
+                ):
+                    raise serializers.ValidationError(
+                        {"cash_waiver": "Cannot exceed short amount"}
+                    )
+
+        return attrs
+
     def validate_table_number(self, value):
         """Validate table number for dine-in orders"""
         # MegaShop POS does not require table/counter selection.
@@ -637,6 +754,10 @@ class POSOrderCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError("Missing request user")
 
         items_data = validated_data.pop("items")
+
+        requested_allow_out_of_stock = bool(
+            validated_data.pop("allow_out_of_stock", False)
+        )
 
         prescription_id = validated_data.pop("prescription_id", None)
 
@@ -779,6 +900,16 @@ class POSOrderCreateSerializer(serializers.Serializer):
         )
 
         with transaction.atomic():
+            # Only privileged roles can oversell inventory.
+            requester_role = getattr(request_user, "role", None)
+            allow_out_of_stock = bool(
+                requested_allow_out_of_stock
+                and (
+                    is_unrestricted_user(request_user)
+                    or requester_role in {"super_admin", "admin", "manager", "cashier"}
+                )
+            )
+
             # Handle customer creation/linking for takeaway/delivery
             customer = None
             order_type = validated_data.get("order_type")
@@ -830,6 +961,9 @@ class POSOrderCreateSerializer(serializers.Serializer):
             # Get cash payment tracking info
             cash_received = validated_data.get("cash_received")
             change_amount = validated_data.get("change_amount")
+            cash_waiver = validated_data.get("cash_waiver")
+
+            payment_method = (validated_data.get("payment_method") or "cash").lower()
 
             # Add cash payment info to notes if applicable
             if cash_received is not None and change_amount is not None:
@@ -839,6 +973,19 @@ class POSOrderCreateSerializer(serializers.Serializer):
                     if combined_notes
                     else cash_info.strip()
                 )
+
+            if cash_waiver is not None and cash_waiver > 0:
+                waiver_info = f"\nCash Waiver: {cash_waiver}"
+                combined_notes = (
+                    f"{combined_notes}{waiver_info}"
+                    if combined_notes
+                    else waiver_info.strip()
+                )
+
+            # For legacy compatibility, store cashAmount as received + waiver (effective tendered).
+            effective_cash_amount = cash_received
+            if effective_cash_amount is not None and cash_waiver is not None:
+                effective_cash_amount = effective_cash_amount + cash_waiver
 
             # Create order with legacy field names
             order = Sale.objects.create(
@@ -854,7 +1001,11 @@ class POSOrderCreateSerializer(serializers.Serializer):
                 currency=validated_data.get("currency", "BDT"),
                 notes=combined_notes,
                 taxes=validated_data.get("tax_rate", 10.0),  # Use legacy field name
-                cashAmount=float(cash_received) if cash_received is not None else 0,
+                cashAmount=(
+                    float(effective_cash_amount)
+                    if effective_cash_amount is not None
+                    else 0
+                ),
                 tip_amount=float(tip_amount),
                 service_charge_rate=float(service_charge_rate),
                 status="confirmed",
@@ -963,7 +1114,7 @@ class POSOrderCreateSerializer(serializers.Serializer):
 
                     # Stock enforcement for MegaShop
                     current_stock = int(getattr(product, "in_stock", 0) or 0)
-                    if current_stock < quantity:
+                    if (not allow_out_of_stock) and current_stock < quantity:
                         raise serializers.ValidationError(
                             {
                                 "items": f"Insufficient stock for {title}. Available: {current_stock}, requested: {quantity}"
@@ -1105,6 +1256,30 @@ class POSOrderCreateSerializer(serializers.Serializer):
             if promo_code:
                 existing_notes = order.notes or ""
                 order.notes = f"{existing_notes} | Promo: {promo_code}".strip()
+
+            # Cash payment validation: ensure received + waiver covers server total when marked paid.
+            if payment_method == "cash" and is_paid:
+                received_total = Decimal(str(cash_received or 0)) + Decimal(
+                    str(cash_waiver or 0)
+                )
+                order_total = Decimal(str(order.totalAmount or 0))
+                if received_total < order_total:
+                    raise serializers.ValidationError(
+                        {
+                            "cash_received": "Insufficient cash received (after waiver) for this order total"
+                        }
+                    )
+                # Waiver should never be used if already fully paid by cash received.
+                if (
+                    cash_waiver
+                    and cash_waiver > 0
+                    and Decimal(str(cash_received or 0)) >= order_total
+                ):
+                    raise serializers.ValidationError(
+                        {
+                            "cash_waiver": "Waiver not allowed when cash received already covers total"
+                        }
+                    )
 
             order.save()
 

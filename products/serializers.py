@@ -12,6 +12,7 @@ from .models.inventory_model import (
     StockMovement,
     ProductStockMovement,
 )
+from .models import ProductType, GenericName, Brand, ProductBarcode, ProductBatch
 from .models.unit_model import Unit
 from suppliers.models import Supplier
 from .function import attempt_json_deserialize
@@ -203,6 +204,36 @@ class ProductPostSerializer(serializers.ModelSerializer):
         return super().update(instance, validated_data)
 
 
+class ProductTypeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductType
+        fields = "__all__"
+
+
+class GenericNameSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = GenericName
+        fields = "__all__"
+
+
+class BrandSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Brand
+        fields = "__all__"
+
+
+class ProductBarcodeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductBarcode
+        fields = "__all__"
+
+
+class ProductBatchSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductBatch
+        fields = "__all__"
+
+
 # class ProductSerializer(serializers.ModelSerializer):
 #      # category = serializers.StringRelatedField(many=True)
 #      newLabel = NewLavelSerializer(required=False) #f
@@ -331,9 +362,12 @@ class InventoryItemSerializer(serializers.ModelSerializer):
 
 
 class InventoryItemCreateUpdateSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(read_only=True)
+
     class Meta:
         model = InventoryItem
         fields = [
+            "id",
             "name",
             "category",
             "unit",

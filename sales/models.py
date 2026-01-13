@@ -44,9 +44,10 @@ PAYMENT_CHOICE = (
 
 # Order type choices for POS
 ORDER_TYPE_CHOICE = (
-    ("dine-in", "Dine In"),
-    ("takeaway", "Takeaway"),
-    ("delivery", "Delivery"),
+    # NOTE: Keep underlying values for backward compatibility with existing DB + frontend.
+    ("In-Store", "In-Store"),
+    ("Pickup", "Pickup"),
+    ("Delivery", "Delivery"),
 )
 
 
@@ -77,13 +78,13 @@ class Sale(Timestamp):
 
     # Order details
     order_type = models.CharField(
-        max_length=20, choices=ORDER_TYPE_CHOICE, default="dine-in"
+        max_length=20, choices=ORDER_TYPE_CHOICE, default="In-Store"
     )
     table_number = models.CharField(
         max_length=50,
         null=True,
         blank=True,
-        help_text="Table number for dine-in orders",
+        help_text="Table number for In-Store orders",
     )
 
     # Customer and staff information
@@ -214,13 +215,24 @@ class Sale(Timestamp):
             import uuid
 
             today = timezone.now().date()
+            company_id = getattr(self, "companyId_id", None)
+            branch_id = getattr(self, "branch_id", None)
+            company_part = str(company_id) if company_id else "0"
+            branch_part = str(branch_id) if branch_id else "0"
+            # Use a shorter date format to keep invoice/order numbers compact.
+            date_part = today.strftime("%y%m%d")
 
             # Use atomic transaction to ensure uniqueness
             with transaction.atomic():
                 # Lock the table to prevent race conditions
                 last_order = (
                     Sale.objects.select_for_update()
-                    .filter(order_number__isnull=False, createDate__date=today)
+                    .filter(
+                        order_number__isnull=False,
+                        createDate__date=today,
+                        companyId_id=company_id,
+                        branch_id=branch_id,
+                    )
                     .order_by("-createDate")
                     .first()
                 )
@@ -235,20 +247,25 @@ class Sale(Timestamp):
                 else:
                     new_num = 1
 
-                # Format: ORD-0001, ORD-0002, etc.
-                potential_order_number = f"ORD-{new_num:04d}"
+                # Format (multi-tenant safe):
+                # ORD-{companyId}-{branchId}-{YYMMDD}-{N}
+                potential_order_number = (
+                    f"ORD-{company_part}-{branch_part}-{date_part}-{new_num}"
+                )
 
                 # Double-check uniqueness and add timestamp if needed
                 while Sale.objects.filter(order_number=potential_order_number).exists():
                     new_num += 1
-                    potential_order_number = f"ORD-{new_num:04d}"
+                    potential_order_number = (
+                        f"ORD-{company_part}-{branch_part}-{date_part}-{new_num}"
+                    )
 
                     # Fallback: add unique suffix if we hit too many collisions
                     if new_num > 9999:
                         timestamp_suffix = str(int(timezone.now().timestamp() * 1000))[
                             -6:
                         ]
-                        potential_order_number = f"ORD-{timestamp_suffix}"
+                        potential_order_number = f"ORD-{company_part}-{branch_part}-{date_part}-{timestamp_suffix}"
                         break
 
                 self.order_number = potential_order_number
@@ -293,7 +310,11 @@ class Sale(Timestamp):
 
         # Auto-set invoice number if not provided
         if not self.invoiceNumber and self.order_number:
-            self.invoiceNumber = self.order_number.replace("ORD", "INV")
+            if self.order_number.startswith("ORD-"):
+                self.invoiceNumber = "INV-" + self.order_number[len("ORD-") :]
+            else:
+                # Backward-compatible fallback
+                self.invoiceNumber = self.order_number.replace("ORD", "INV")
 
         # Update payment status based on status
         if self.status == "paid":
@@ -332,14 +353,20 @@ class Sale(Timestamp):
         return self.totalQty or 0
 
     @property
+    def is_in_store(self):
+        """Check if this is an In-Store order"""
+        return self.order_type == "In-Store"
+
+    # Backward compatibility alias
+    @property
     def is_dine_in(self):
-        """Check if this is a dine-in order"""
-        return self.order_type == "dine-in"
+        """Alias for is_in_store (backward compatibility)"""
+        return self.is_in_store
 
     @property
     def display_name(self):
         """Display name for the order"""
-        if self.order_type == "dine-in" and self.table_number:
+        if self.order_type == "In-Store" and self.table_number:
             return f"Table {self.table_number}"
         elif self.customer:
             return f"{self.customer.name}"

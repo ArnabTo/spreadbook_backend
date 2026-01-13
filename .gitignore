@@ -2,6 +2,8 @@
 __pycache__/
 *.py[cod]
 *$py.class
+
+# C extensions
 *.so
 
 # Distribution / packaging
@@ -51,16 +53,17 @@ target/
 
 # Django
 *.log
-*.pot
-*.pyc
-__pycache__/
 staticfiles/
 media/
+local_settings.py
+
+# Ignore Django migrations except __init__.py
+**/migrations/*.py
+**/migrations/*.pyc
+!**/migrations/__init__.py
 
 # User-uploaded media (kept outside git)
 assets/uploads/
-
-
 
 # Database files - DO NOT PUSH TO REPOSITORY
 *.sqlite3
@@ -68,14 +71,14 @@ assets/uploads/
 *.sqlite
 db*.sqlite3
 **/db*.sqlite3
-local_settings.py
 
 # Development and temporary files
 *.tmp
 *.temp
-*.log
 *.pid
 *.lock
+
+# Environment files
 .env
 .env.local
 .env.development.local
@@ -89,6 +92,7 @@ local_settings.py
 *.swo
 *~
 
+# Assets
 */assets/
 */assets1/
 
@@ -111,11 +115,7 @@ backup/
 .DS_Store
 .AppleDouble
 .LSOverride
-
-# Thumbnails
 ._*
-
-# Files that might appear in the root of a volume
 .DocumentRevisions-V100
 .fseventsd
 .Spotlight-V100

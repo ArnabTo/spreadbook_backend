@@ -10,6 +10,14 @@ from .inventory_model import (
     ProductStockMovement,
 )
 
+from .catalog_extras import (
+    ProductType,
+    GenericName,
+    Brand,
+    ProductBarcode,
+    ProductBatch,
+)
+
 __all__ = [
     "Category",
     "Product",
@@ -18,4 +26,9 @@ __all__ = [
     "InventoryCategory",
     "StockMovement",
     "ProductStockMovement",
+    "ProductType",
+    "GenericName",
+    "Brand",
+    "ProductBarcode",
+    "ProductBatch",
 ]

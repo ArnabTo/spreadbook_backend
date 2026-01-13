@@ -230,8 +230,30 @@ def end_shift_report(request):
             branch_id_field="branch_id",
         )
 
-        # Optional: allow per-cashier report (default is ALL cashiers to match order list)
+        # Optional: allow per-cashier report (default is ALL cashiers).
+        # Security: cashiers/staff should not see other users' totals.
         served_by_param = request.GET.get("served_by")
+
+        role = (getattr(request.user, "role", "") or "").lower()
+        is_manager_plus = role in {
+            "manager",
+            "admin",
+            "super_admin",
+            "software_owner",
+        } or bool(getattr(request.user, "is_superuser", False))
+
+        if not is_manager_plus and served_by_param not in {None, "", "me"}:
+            return Response(
+                {
+                    "error": "You do not have permission to view other cashiers' shift reports"
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # If cashier/staff (non-manager), force served_by=me
+        if not is_manager_plus:
+            served_by_param = "me"
+
         served_by_payload = {"id": None, "name": "All"}
         if served_by_param:
             if served_by_param == "me":

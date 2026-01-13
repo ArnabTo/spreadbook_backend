@@ -33,19 +33,47 @@ from rest_framework import serializers, viewsets, permissions
 from rest_framework import generics
 from django.shortcuts import render
 
+from common.drf_scoping import is_unrestricted_user
+from common.permissions import IsBranchManagerOrAbove
+
 
 class UserViewSet(viewsets.ModelViewSet):
     # queryset = Product.objects.all()
     serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated, IsBranchManagerOrAbove]
 
     # http_method_names= ['get']
     def get_queryset(self):
-        return GenUser.objects.all()
+        user = self.request.user
+        qs = GenUser.objects.all()
+
+        if is_unrestricted_user(user) or bool(getattr(user, "is_superuser", False)):
+            return qs
+
+        company_id = getattr(user, "companyId_id", None)
+        if company_id:
+            return (
+                qs.filter(companyId_id=company_id)
+                .select_related("companyId", "resellerId")
+                .prefetch_related("branchAccess")
+            )
+
+        # Fallback: derive company scope from branch access.
+        if hasattr(user, "branchAccess") and user.branchAccess.exists():
+            company_ids = set(user.branchAccess.values_list("company_id", flat=True))
+            return (
+                qs.filter(companyId_id__in=list(company_ids))
+                .select_related("companyId", "resellerId")
+                .prefetch_related("branchAccess")
+            )
+
+        return GenUser.objects.none()
 
 
 class UserCompanyViewSet(viewsets.ModelViewSet):
     # queryset = Product.objects.all()
     serializer_class = UserCompanySerializer
+    permission_classes = [permissions.IsAuthenticated, IsBranchManagerOrAbove]
 
     # http_method_names= ['get']
     def get_queryset(self):
@@ -60,7 +88,7 @@ class UserCompanyBranchViewSet(viewsets.ModelViewSet):
     """
 
     serializer_class = UserCompanyBranchSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsBranchManagerOrAbove]
 
     def get_queryset(self):
         """Filter users by company and branch access"""

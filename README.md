@@ -34,6 +34,13 @@ python manage.py runserver
 - Kill dev ports:
 
 	lsof -t -i tcp:8000 | xargs kill -9
+lsof -t -i tcp:3075 | xargs kill -9
 
 ## CI/CD
 GitHub Actions is expected to run basic checks and keep secrets in repository/environment secrets.# apibiz
+
+
+
+1. Print End Shift Report
+
+

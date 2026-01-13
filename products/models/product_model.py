@@ -120,6 +120,45 @@ class Product(Timestamp):
     sku = models.CharField(max_length=100, null=True, blank=True)
     category = models.CharField(max_length=100, default="", null=True, blank=True)
 
+    # MegaShop catalog helpers (optional; keeps existing APIs stable)
+    category_ref = models.ForeignKey(
+        Category,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="products_ref",
+    )
+    item_type = models.ForeignKey(
+        "products.ProductType",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="products",
+    )
+    generic_name = models.ForeignKey(
+        "products.GenericName",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="products",
+    )
+    brand = models.ForeignKey(
+        "products.Brand",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="products",
+    )
+
+    # Flexible extra fields (max variables without new migrations)
+    extra = models.JSONField(default=dict, blank=True)
+
+    # Stock threshold customization (default keeps current behavior)
+    low_stock_threshold = models.PositiveIntegerField(default=20)
+
+    # Enable per-batch tracking for pharmacy/perishable items (see ProductBatch)
+    track_batches = models.BooleanField(default=False)
+
     gender = models.CharField(
         max_length=100, choices=GENDER_CHOICE, default="All", blank=True, null=True
     )
@@ -228,7 +267,7 @@ class Product(Timestamp):
     status = models.CharField(
         max_length=20,
         choices=[("out of stock", "Out of Stock"), ("in stock", "In Stock")],
-        default="In stock",
+        default="in stock",
     )
     technology = models.CharField(
         verbose_name="Technology",
@@ -323,13 +362,18 @@ class Product(Timestamp):
 
     def save(self, *args, **kwargs):
         """override the save method for logical purposes"""
-        if self.in_stock >= 21:
+        # NOTE: Avoid mutating price fields on partial updates.
+        # Some code paths call save(update_fields=[...]) for stock/status changes.
+        update_fields = kwargs.get("update_fields")
+
+        low_threshold = int(self.low_stock_threshold or 20)
+        if self.in_stock >= (low_threshold + 1):
             self.status = "in stock"
             self.inventoryType = "in stock"
             self.available = self.in_stock
             self.out_of_stock = False
 
-        elif self.in_stock >= 1 | self.in_stock <= 20:
+        elif 1 <= self.in_stock <= low_threshold:
             self.status = "in stock"
             self.inventoryType = "low stock"
             self.available = self.in_stock
@@ -343,6 +387,22 @@ class Product(Timestamp):
             self.available = self.in_stock
         # Save the product with a random product code.
         # self.code = self.code + 1
+
+        # Price behavior:
+        # - `price` is the main selling price.
+        # - `priceSale` is an optional discounted/sale price.
+        # Historically this project overwrote `price` with `priceSale`, which
+        # caused `price` to become 0 when only `price` was provided and `priceSale` stayed at default 0.
+        if update_fields is None:
+            price = float(self.price or 0)
+            price_sale = float(self.priceSale or 0)
+
+            # Backward compatible defaults: if only one is provided, mirror it.
+            if price <= 0 and price_sale > 0:
+                self.price = price_sale
+            elif price > 0 and price_sale <= 0:
+                self.priceSale = price
+
         super(Product, self).save(*args, **kwargs)
 
     def save_model(self, request, obj, form, change):

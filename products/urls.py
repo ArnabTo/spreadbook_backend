@@ -8,6 +8,12 @@ from .api import (
     SaleLabelSet,
     CategoryViewSet,
     PosProductIndexView,
+    ProductOptionsView,
+    ProductTypeViewSet,
+    GenericNameViewSet,
+    BrandViewSet,
+    ProductBarcodeViewSet,
+    ProductBatchViewSet,
 )
 from .api import ColorViewSet, SizeViewSet
 from .inventory_api import (
@@ -30,6 +36,13 @@ router.register("api/product/category", CategoryViewSet, "category")
 router.register("api/product/color", ColorViewSet, "color")
 router.register("api/product/size", SizeViewSet, "size")
 
+# MegaShop catalog helpers
+router.register("api/product/types", ProductTypeViewSet, "product-types")
+router.register("api/product/generic-names", GenericNameViewSet, "generic-names")
+router.register("api/product/brands", BrandViewSet, "brands")
+router.register("api/product/barcodes", ProductBarcodeViewSet, "product-barcodes")
+router.register("api/product/batches", ProductBatchViewSet, "product-batches")
+
 # Inventory Management APIs
 router.register("api/inventory/items", InventoryItemViewSet, "inventory-items")
 router.register(
@@ -42,6 +55,11 @@ urlpatterns = router.urls
 
 # POS / Dexie lightweight product index
 urlpatterns = [
+    path(
+        "api/product/options/",
+        ProductOptionsView.as_view(),
+        name="product-options",
+    ),
     path(
         "api/pos/product-index/",
         PosProductIndexView.as_view(),

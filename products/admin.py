@@ -4,6 +4,7 @@ from django.contrib import admin
 from django.utils.html import format_html
 
 from .models import Category, Product, Unit
+from .models import ProductType, GenericName, Brand, ProductBarcode, ProductBatch
 from .models.product_model import NewLabel, SaleLabel, Size, Image, Tag, Color
 from .models.rating_model import Rating
 from .models.review_model import Review
@@ -32,9 +33,21 @@ class ProductStockMovementAdmin(admin.ModelAdmin):
 
 @admin.register(Product)
 class ProductAdmin(ImportExportModelAdmin):
+    class ProductBarcodeInline(admin.TabularInline):
+        model = ProductBarcode
+        extra = 1
+
+    class ProductBatchInline(admin.TabularInline):
+        model = ProductBatch
+        extra = 0
+        autocomplete_fields = ("branch", "supplier")
+
+    inlines = (ProductBarcodeInline, ProductBatchInline)
+
     list_display = (
         "name",
         "code",
+        "generic_name",
         "priceSale",
         "regular_price",
         "quantity",
@@ -51,17 +64,23 @@ class ProductAdmin(ImportExportModelAdmin):
         "updateAt",
     )
     list_filter = ("status", "category", "unit", "status", "supplier")
-    search_fields = ("name", "category__name", "unit__name")
+    search_fields = ("name", "code", "sku", "category", "unit__name")
     list_per_page = 20
     list_editable = ("quantity", "priceSale")
     filter_horizontal = ("sizes",)
     ordering = ("-createdAt",)
+
+    # Some deployments previously referenced `branchname` in admin fieldsets.
+    # Keep this for backward compatibility so the admin change page doesn't crash.
+    readonly_fields = ("branchname",)
 
     fieldsets = (
         (
             None,
             {
                 "fields": (
+                    "companyId",
+                    "branch",
                     "name",
                     "brand_name",
                     "manufacturer",
@@ -92,7 +111,10 @@ class ProductAdmin(ImportExportModelAdmin):
         (
             "Category",
             {
-                "fields": ("category",),
+                "fields": (
+                    "category",
+                    "generic_name",
+                ),
             },
         ),
         (
@@ -149,6 +171,12 @@ class ProductAdmin(ImportExportModelAdmin):
             )
         else:
             return obj.status
+
+    def branchname(self, obj):
+        branch = getattr(obj, "branch", None)
+        return getattr(branch, "name", "") if branch else ""
+
+    branchname.short_description = "Branch"
 
 
 @admin.register(Category)
@@ -218,6 +246,55 @@ class UnitAdmin(ImportExportModelAdmin):
 @admin.register(Image)
 class UnitAdmin(ImportExportModelAdmin):
     list_display = ("id",)
+
+
+@admin.register(ProductType)
+class ProductTypeAdmin(ImportExportModelAdmin):
+    list_display = ("name", "slug", "companyId", "is_active", "createdAt")
+    list_filter = ("is_active",)
+    search_fields = ("name", "slug")
+    list_per_page = 25
+
+
+@admin.register(GenericName)
+class GenericNameAdmin(ImportExportModelAdmin):
+    list_display = ("name", "companyId", "is_active", "createdAt")
+    list_filter = ("is_active",)
+    search_fields = ("name",)
+    list_per_page = 25
+
+
+@admin.register(Brand)
+class BrandAdmin(ImportExportModelAdmin):
+    list_display = ("name", "companyId", "is_active", "createdAt")
+    list_filter = ("is_active",)
+    search_fields = ("name",)
+    list_per_page = 25
+
+
+@admin.register(ProductBarcode)
+class ProductBarcodeAdmin(admin.ModelAdmin):
+    list_display = ("code", "product", "is_primary", "createdAt")
+    list_filter = ("is_primary",)
+    search_fields = ("code", "product__name", "product__sku", "product__code")
+    autocomplete_fields = ("product",)
+    list_per_page = 50
+
+
+@admin.register(ProductBatch)
+class ProductBatchAdmin(admin.ModelAdmin):
+    list_display = (
+        "product",
+        "branch",
+        "batch_no",
+        "qty_on_hand",
+        "exp_date",
+        "receivedAt",
+    )
+    list_filter = ("branch",)
+    search_fields = ("batch_no", "product__name", "product__sku", "product__code")
+    autocomplete_fields = ("product", "branch", "supplier")
+    list_per_page = 50
     list_filter = ("id",)
     search_fields = ("id",)
     list_per_page = 10
