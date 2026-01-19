@@ -575,6 +575,16 @@ class POSOrderCreateSerializer(serializers.Serializer):
     # Backend still enforces that only privileged roles can enable this.
     allow_out_of_stock = serializers.BooleanField(required=False, default=False)
 
+    # Allow POS to provide a manual unit price for Product lines when the server-side
+    # Product has no usable price (0 / missing). This is primarily for correcting
+    # catalog issues at checkout time.
+    allow_price_override = serializers.BooleanField(required=False, default=False)
+
+    # Allow cash payments to be partial (remaining amount becomes due).
+    # When enabled, backend will not reject cash_received < total and will store
+    # the paid portion in `advance` and the remainder in `due`.
+    allow_partial_cash = serializers.BooleanField(required=False, default=False)
+
     def validate_order_type(self, value):
         """Normalize order_type from frontend format to backend format"""
         if not value:
@@ -660,8 +670,7 @@ class POSOrderCreateSerializer(serializers.Serializer):
 
         return items
 
-    def validate(self, attrs):
-        attrs = super().validate(attrs)
+    def _validate_cash_fields(self, attrs):
 
         payment_method = (attrs.get("payment_method") or "").lower()
         cash_received = attrs.get("cash_received")
@@ -718,13 +727,15 @@ class POSOrderCreateSerializer(serializers.Serializer):
         # Keep `table_number` purely optional for backward compatibility.
         return value
 
-    def validate(self, data):
-        """Validate customer data for takeaway/delivery orders"""
-        order_type = data.get("order_type")
+    def validate(self, attrs):
+        """Validate customer and cash-related fields for POS order creation"""
+        attrs = super().validate(attrs)
+
+        order_type = attrs.get("order_type")
 
         # Require customer phone for delivery only (takeaway phone is optional)
         if order_type == "delivery":
-            customer_phone = data.get("customer_phone")
+            customer_phone = attrs.get("customer_phone")
             if not customer_phone or not customer_phone.strip():
                 raise serializers.ValidationError(
                     {
@@ -734,7 +745,7 @@ class POSOrderCreateSerializer(serializers.Serializer):
 
         # Require address for delivery
         if order_type == "delivery":
-            customer_address = data.get("customer_address")
+            customer_address = attrs.get("customer_address")
             if not customer_address or not customer_address.strip():
                 raise serializers.ValidationError(
                     {
@@ -742,7 +753,7 @@ class POSOrderCreateSerializer(serializers.Serializer):
                     }
                 )
 
-        return data
+        return self._validate_cash_fields(attrs)
 
     def create(self, validated_data):
         """Create POS order from frontend data"""
@@ -758,6 +769,10 @@ class POSOrderCreateSerializer(serializers.Serializer):
         requested_allow_out_of_stock = bool(
             validated_data.pop("allow_out_of_stock", False)
         )
+
+        allow_price_override = bool(validated_data.pop("allow_price_override", False))
+
+        allow_partial_cash = bool(validated_data.pop("allow_partial_cash", False))
 
         prescription_id = validated_data.pop("prescription_id", None)
 
@@ -1090,7 +1105,8 @@ class POSOrderCreateSerializer(serializers.Serializer):
 
                 title = item_data.get("name")
                 category = item_data.get("category", "")
-                unit_price = Decimal(str(item_data.get("price") or 0))
+                client_unit_price = Decimal(str(item_data.get("price") or 0))
+                unit_price = client_unit_price
 
                 if product:
                     # If the payload used a product code as "id", normalize stored id to UUID.
@@ -1107,7 +1123,15 @@ class POSOrderCreateSerializer(serializers.Serializer):
                     )
                     if not effective or float(effective) <= 0:
                         effective = getattr(product, "regular_price", None) or 0
-                    unit_price = Decimal(str(effective or 0))
+
+                    # Prefer server pricing, but if the product has no usable price,
+                    # optionally allow the POS to supply a manual unit price.
+                    if effective and float(effective) > 0:
+                        unit_price = Decimal(str(effective))
+                    else:
+                        unit_price = Decimal("0")
+                        if allow_price_override and client_unit_price > 0:
+                            unit_price = client_unit_price
 
                     title = getattr(product, "name", None) or title
                     category = getattr(product, "category", None) or category
@@ -1125,7 +1149,7 @@ class POSOrderCreateSerializer(serializers.Serializer):
 
                 if menu_item and (unit_price <= 0):
                     # Keep legacy behavior: accept client-sent price for menu items.
-                    unit_price = Decimal(str(item_data.get("price") or 0))
+                    unit_price = client_unit_price
 
                 if unit_price <= 0:
                     raise serializers.ValidationError(
@@ -1257,18 +1281,15 @@ class POSOrderCreateSerializer(serializers.Serializer):
                 existing_notes = order.notes or ""
                 order.notes = f"{existing_notes} | Promo: {promo_code}".strip()
 
-            # Cash payment validation: ensure received + waiver covers server total when marked paid.
-            if payment_method == "cash" and is_paid:
+            # Cash payment handling:
+            # - If allow_partial_cash: accept cash_received < total and store remainder as due.
+            # - Otherwise: if marked paid, require cash_received + waiver >= total.
+            if payment_method == "cash":
                 received_total = Decimal(str(cash_received or 0)) + Decimal(
                     str(cash_waiver or 0)
                 )
                 order_total = Decimal(str(order.totalAmount or 0))
-                if received_total < order_total:
-                    raise serializers.ValidationError(
-                        {
-                            "cash_received": "Insufficient cash received (after waiver) for this order total"
-                        }
-                    )
+
                 # Waiver should never be used if already fully paid by cash received.
                 if (
                     cash_waiver
@@ -1280,6 +1301,43 @@ class POSOrderCreateSerializer(serializers.Serializer):
                             "cash_waiver": "Waiver not allowed when cash received already covers total"
                         }
                     )
+
+                if received_total < order_total:
+                    if allow_partial_cash:
+                        # Partial payment: force unpaid.
+                        order.is_paid = False
+                    else:
+                        if is_paid:
+                            raise serializers.ValidationError(
+                                {
+                                    "cash_received": "Insufficient cash received (after waiver) for this order total"
+                                }
+                            )
+                        # Prevent bypass by sending is_paid=false with a partial cash amount.
+                        if cash_received is not None:
+                            raise serializers.ValidationError(
+                                {
+                                    "cash_received": "Partial cash payment is not enabled for POS"
+                                }
+                            )
+                else:
+                    # Fully covered by cash (after waiver)
+                    if allow_partial_cash:
+                        order.is_paid = True
+
+                # Track cash payments as advance (amount applied) and due (remaining balance).
+                # Note: cashAmount already stores tendered cash (received + waiver) for legacy reporting.
+                if cash_received is not None:
+                    try:
+                        applied = min(
+                            max(received_total, Decimal("0")),
+                            max(order_total, Decimal("0")),
+                        )
+                        due = max(order_total - applied, Decimal("0"))
+                        order.advance = float(applied)
+                        order.due = float(due)
+                    except Exception:
+                        pass
 
             order.save()
 

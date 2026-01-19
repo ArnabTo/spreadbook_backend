@@ -320,9 +320,13 @@ class Sale(Timestamp):
         if self.status == "paid":
             self.is_paid = True
 
-        # Calculate due amount
-        if self.totalAmount and self.advance:
-            self.due = self.totalAmount - self.advance
+        # Calculate due amount (allow advance=0)
+        if self.totalAmount is not None and self.advance is not None:
+            try:
+                self.due = max(float(self.totalAmount) - float(self.advance), 0.0)
+            except Exception:
+                # Keep existing due on parse errors
+                pass
 
         # Keep derived amounts consistent.
         if self.subTotal is not None:

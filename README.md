@@ -38,7 +38,28 @@ lsof -t -i tcp:3075 | xargs kill -9
 
 ## CI/CD
 GitHub Actions is expected to run basic checks and keep secrets in repository/environment secrets.# apibiz
+sudo systemctl daemon-reload
+sudo systemctl restart fcil
+sudo systemctl status fcil
 
+
+sudo systemctl reload nginx
+sudo systemctl restart nginx
+sudo systemctl status nginx
+
+git add .
+
+git commit -m "added more sets commit"
+
+git push
+
+
+find ./shiftovertime/migrations/ -type f ! -name '__init__.py' -delete
+
+ALL 
+find . -path "*/migrations/*.py" -not -name "__init__.py" -delete
+
+find . -path "*/migrations/*.pyc" -delete
 
 
 1. Print End Shift Report
