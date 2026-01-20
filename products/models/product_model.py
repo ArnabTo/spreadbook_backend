@@ -393,15 +393,8 @@ class Product(Timestamp):
         # - `priceSale` is an optional discounted/sale price.
         # Historically this project overwrote `price` with `priceSale`, which
         # caused `price` to become 0 when only `price` was provided and `priceSale` stayed at default 0.
-        if update_fields is None:
-            price = float(self.price or 0)
-            price_sale = float(self.priceSale or 0)
-
-            # Backward compatible defaults: if only one is provided, mirror it.
-            if price <= 0 and price_sale > 0:
-                self.price = price_sale
-            elif price > 0 and price_sale <= 0:
-                self.priceSale = price
+        
+        self.priceSale = self.price
 
         super(Product, self).save(*args, **kwargs)
 
