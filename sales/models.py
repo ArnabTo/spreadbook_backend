@@ -76,6 +76,15 @@ class Sale(Timestamp):
         max_length=100, null=True, blank=True
     )  # Keep for backward compatibility
 
+    # Secure shareable link token for customer invoice view
+    share_token = models.CharField(
+        max_length=64,
+        unique=True,
+        null=True,
+        blank=True,
+        help_text="Unique token for secure invoice sharing via QR code",
+    )
+
     # Order details
     order_type = models.CharField(
         max_length=20, choices=ORDER_TYPE_CHOICE, default="In-Store"
@@ -270,6 +279,17 @@ class Sale(Timestamp):
 
                 self.order_number = potential_order_number
 
+    def generate_share_token(self):
+        """Generate a unique secure token for invoice sharing"""
+        if not self.share_token:
+            import secrets
+
+            # Generate a secure random token
+            self.share_token = secrets.token_urlsafe(32)
+            # Ensure uniqueness
+            while Sale.objects.filter(share_token=self.share_token).exists():
+                self.share_token = secrets.token_urlsafe(32)
+
     def calculate_totals(self):
         """Calculate order totals based on items"""
         # Sum up item totals and convert to float
@@ -304,9 +324,34 @@ class Sale(Timestamp):
 
     def save(self, *args, **kwargs):
         """Enhanced save method for POS orders"""
+        # Keep multi-tenant scoping consistent.
+        # If a branch is set but companyId is missing, infer companyId from branch.
+        if getattr(self, "branch_id", None) and not getattr(self, "companyId_id", None):
+            try:
+                self.companyId = getattr(self.branch, "company", None)
+            except Exception:
+                # If branch isn't loaded for some reason, leave as-is.
+                pass
+
+        # If both are set but disagree, normalize companyId to match branch.company.
+        # (Safer than raising here; keeps older codepaths from crashing.)
+        if getattr(self, "branch_id", None) and getattr(self, "companyId_id", None):
+            try:
+                branch_company_id = getattr(self.branch, "company_id", None)
+                if branch_company_id and str(branch_company_id) != str(
+                    self.companyId_id
+                ):
+                    self.companyId_id = branch_company_id
+            except Exception:
+                pass
+
         # Generate order number if not exists
         if not self.order_number:
             self.generate_order_number()
+
+        # Generate share token for secure invoice viewing
+        if not self.share_token:
+            self.generate_share_token()
 
         # Auto-set invoice number if not provided
         if not self.invoiceNumber and self.order_number:

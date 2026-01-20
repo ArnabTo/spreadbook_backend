@@ -33,7 +33,7 @@ python manage.py runserver
 	- `python manage.py migrate --fake <appname>`
 - Kill dev ports:
 
-	lsof -t -i tcp:8000 | xargs kill -9
+lsof -t -i tcp:8000 | xargs kill -9
 lsof -t -i tcp:3075 | xargs kill -9
 
 ## CI/CD
@@ -65,3 +65,4 @@ find . -path "*/migrations/*.pyc" -delete
 1. Print End Shift Report
 
 
+2, QR CODE and sand sms to link

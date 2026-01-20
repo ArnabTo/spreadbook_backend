@@ -312,6 +312,11 @@ class SalePostSerializer(serializers.ModelSerializer):
 class POSOrderItemSerializer(serializers.ModelSerializer):
     """Serializer for POS order items"""
 
+    # Backward/forward compatibility: some POS clients send `name` instead of `title`.
+    name = serializers.CharField(
+        source="title", required=False, allow_blank=True, write_only=True
+    )
+
     # Add properties for new field names
     unit_price = serializers.DecimalField(
         max_digits=10, decimal_places=2, source="price"
@@ -330,6 +335,7 @@ class POSOrderItemSerializer(serializers.ModelSerializer):
             "menu_item_id",
             "menu_item_code",
             "title",
+            "name",
             "description",
             "category",
             "quantity",
@@ -382,11 +388,16 @@ class POSOrderSerializer(serializers.ModelSerializer):
     served_by = serializers.SerializerMethodField()
     served_by_name = serializers.SerializerMethodField()
 
+    company_name = serializers.SerializerMethodField()
+    branch_name = serializers.SerializerMethodField()
+    store = serializers.SerializerMethodField()
+
     class Meta:
         model = Sale
         fields = [
             "id",
             "order_number",
+            "share_token",
             "order_type",
             "table_number",
             "status",
@@ -395,6 +406,9 @@ class POSOrderSerializer(serializers.ModelSerializer):
             "notes",
             "served_by",
             "served_by_name",
+            "company_name",
+            "branch_name",
+            "store",
             "subtotal",
             "tax_rate",
             "tax_amount",
@@ -417,6 +431,7 @@ class POSOrderSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "id",
             "order_number",
+            "share_token",
             "order_time",
             "subtotal",
             "tax_amount",
@@ -506,10 +521,85 @@ class POSOrderSerializer(serializers.ModelSerializer):
         # Add computed fields
         data["total_items"] = instance.total_items
         data["display_name"] = instance.display_name
+        data["customer_id"] = (
+            getattr(instance.customer, "id", None)
+            if getattr(instance, "customer", None)
+            else None
+        )
+        data["customer_name"] = (
+            getattr(instance.customer, "name", None)
+            if getattr(instance, "customer", None)
+            else None
+        )
+        data["customer_phone"] = (
+            getattr(instance.customer, "phoneNumber", None)
+            if getattr(instance, "customer", None)
+            else None
+        )
+        data["customer_address"] = (
+            getattr(instance.customer, "fullAddress", None)
+            if getattr(instance, "customer", None)
+            else None
+        )
         data["status_display"] = instance.get_status_display()
         data["order_type_display"] = instance.get_order_type_display()
 
         return data
+
+    def get_company_name(self, obj):
+        company = getattr(obj, "companyId", None) or getattr(
+            getattr(obj, "branch", None), "company", None
+        )
+        return getattr(company, "name", None) if company else None
+
+    def get_branch_name(self, obj):
+        branch = getattr(obj, "branch", None)
+        return getattr(branch, "name", None) if branch else None
+
+    def get_store(self, obj):
+        """Return store details used in receipt header (nullable fields allowed)."""
+
+        branch = getattr(obj, "branch", None)
+        company = getattr(obj, "companyId", None) or getattr(branch, "company", None)
+
+        if not branch and not company:
+            return None
+
+        # Address priority
+        address = None
+        if branch:
+            address = getattr(branch, "fullAddress", None) or getattr(
+                branch, "location", None
+            )
+        if not address and company:
+            address = getattr(company, "fullAddress", None) or getattr(
+                company, "address", None
+            )
+
+        # Phone priority
+        phone = None
+        if branch:
+            phone = getattr(branch, "phoneNumber", None) or getattr(
+                branch, "phone", None
+            )
+        if not phone and company:
+            phone = getattr(company, "phoneNumber", None) or getattr(
+                company, "phone", None
+            )
+
+        # Branch model doesn't have website; use company.url
+        website = getattr(company, "url", None) if company else None
+
+        return {
+            "name": (
+                getattr(branch, "name", None)
+                if branch
+                else getattr(company, "name", None)
+            ),
+            "address": address,
+            "phone": phone,
+            "website": website,
+        }
 
     def get_served_by(self, obj):
         u = getattr(obj, "served_by", None)
@@ -535,16 +625,16 @@ class POSOrderSerializer(serializers.ModelSerializer):
 
 # Mapping of frontend order types to backend order types
 ORDER_TYPE_MAPPING = {
-    # Frontend format → Backend format (normalized lowercase)
+    # Frontend format → Backend format (must match ORDER_TYPE_CHOICE in models.py)
     "In-Store": "In-Store",
     "in-store": "In-Store",
-    "Pickup": "takeaway",
-    "pickup": "takeaway",
-    "Delivery": "delivery",
-    "delivery": "delivery",
-    # Also accept backend format directly
-    "dine-in": "dine-in",
-    "takeaway": "takeaway",
+    "Pickup": "Pickup",
+    "pickup": "Pickup",
+    "Delivery": "Delivery",
+    "delivery": "Delivery",
+    # Legacy/alternate formats
+    "dine-in": "In-Store",
+    "takeaway": "Pickup",
 }
 
 
@@ -651,12 +741,21 @@ class POSOrderCreateSerializer(serializers.Serializer):
     def validate_items(self, items):
         """Validate order items"""
         for item in items:
-            required_fields = ["id", "name", "quantity"]
+            # Accept both restaurant payloads (`name`) and older/newer payloads (`title`).
+            required_fields = ["id", "quantity"]
             for field in required_fields:
                 if field not in item:
                     raise serializers.ValidationError(
                         f"Item missing required field: {field}"
                     )
+
+            # At least one of name/title must be present (or resolvable later from DB).
+            # We keep this permissive, but avoid creating DB rows with NULL title.
+            name_or_title = (item.get("name") or item.get("title") or "").strip()
+            if not name_or_title:
+                # Don't hard-fail here if the item can be resolved from DB by id/code.
+                # Validation happens again during create when MenuItem/Product lookup is available.
+                pass
 
             if item["quantity"] <= 0:
                 raise serializers.ValidationError(
@@ -733,8 +832,8 @@ class POSOrderCreateSerializer(serializers.Serializer):
 
         order_type = attrs.get("order_type")
 
-        # Require customer phone for delivery only (takeaway phone is optional)
-        if order_type == "delivery":
+        # Require customer phone for delivery only (Pickup phone is optional)
+        if order_type == "Delivery":
             customer_phone = attrs.get("customer_phone")
             if not customer_phone or not customer_phone.strip():
                 raise serializers.ValidationError(
@@ -744,7 +843,7 @@ class POSOrderCreateSerializer(serializers.Serializer):
                 )
 
         # Require address for delivery
-        if order_type == "delivery":
+        if order_type == "Delivery":
             customer_address = attrs.get("customer_address")
             if not customer_address or not customer_address.strip():
                 raise serializers.ValidationError(
@@ -925,28 +1024,34 @@ class POSOrderCreateSerializer(serializers.Serializer):
                 )
             )
 
-            # Handle customer creation/linking for takeaway/delivery
+            # Handle customer creation/linking when a phone is provided.
             customer = None
             order_type = validated_data.get("order_type")
 
-            if order_type in ["takeaway", "delivery"] and customer_phone:
+            if customer_phone and order_type in [
+                "Pickup",
+                "Delivery",
+                "In-Store",
+            ]:
                 if customer_id:
-                    # Use existing customer
-                    try:
-                        customer = Customer.objects.get(id=customer_id)
-                        # Update last visit
-                        from django.utils import timezone
+                    customer = Customer.objects.filter(
+                        id=customer_id,
+                        companyId=company,
+                    ).first()
 
+                    if customer:
                         customer.lastVisit = timezone.now().date()
                         customer.save(update_fields=["lastVisit"])
-                    except Customer.DoesNotExist:
-                        customer = None
 
                 if not customer:
                     # Search by phone number
                     customer = Customer.objects.filter(
                         phoneNumber=customer_phone, companyId=company
                     ).first()
+
+                    if customer:
+                        customer.lastVisit = timezone.now().date()
+                        customer.save(update_fields=["lastVisit"])
 
                     if not customer:
                         # Create new customer
@@ -1103,7 +1208,7 @@ class POSOrderCreateSerializer(serializers.Serializer):
                 # Create order item using legacy field names
                 quantity = int(item_data["quantity"])
 
-                title = item_data.get("name")
+                title = item_data.get("name") or item_data.get("title")
                 category = item_data.get("category", "")
                 client_unit_price = Decimal(str(item_data.get("price") or 0))
                 unit_price = client_unit_price
@@ -1150,6 +1255,20 @@ class POSOrderCreateSerializer(serializers.Serializer):
                 if menu_item and (unit_price <= 0):
                     # Keep legacy behavior: accept client-sent price for menu items.
                     unit_price = client_unit_price
+
+                # If this is a restaurant MenuItem and client didn't send a name/title,
+                # fall back to the MenuItem's display name.
+                if menu_item and (not title or not str(title).strip()):
+                    title = (
+                        getattr(menu_item, "name", None)
+                        or getattr(menu_item, "title", None)
+                        or title
+                    )
+
+                if not title or not str(title).strip():
+                    raise serializers.ValidationError(
+                        {"items": f"Missing item name/title for item id {raw_item_id}"}
+                    )
 
                 if unit_price <= 0:
                     raise serializers.ValidationError(

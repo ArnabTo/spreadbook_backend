@@ -216,6 +216,90 @@ def pos_settings(request):
     )
 
 
+@api_view(["GET"])
+@permission_classes([permissions.AllowAny])
+def public_invoice_view(request, token):
+    """
+    Public endpoint for viewing invoice details via secure token.
+    No authentication required - anyone with the token can view.
+    Returns ONLY invoice information, nothing else.
+    Token expires after 30 days from order creation.
+    """
+    try:
+        from datetime import timedelta
+        from django.utils import timezone
+
+        # Find order by share token
+        order = (
+            Sale.objects.filter(share_token=token)
+            .select_related("customer", "companyId", "branch")
+            .prefetch_related("items")
+            .first()
+        )
+
+        if not order:
+            return Response(
+                {"success": False, "error": "Invalid or expired invoice link"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Check if token has expired (30 days from order creation)
+        if order.createDate:
+            expiry_date = order.createDate + timedelta(days=30)
+            if timezone.now() > expiry_date:
+                return Response(
+                    {
+                        "success": False,
+                        "error": "This invoice link has expired. Invoice links are valid for 30 days.",
+                    },
+                    status=status.HTTP_410_GONE,
+                )
+
+        # Serialize order data - using POSOrderSerializer but limiting fields
+        serializer = POSOrderSerializer(order)
+        data = serializer.data
+
+        # Return only invoice-related fields for security
+        invoice_data = {
+            "success": True,
+            "invoice": {
+                "order_number": data.get("order_number"),
+                "order_type": data.get("order_type"),
+                "order_type_display": data.get("order_type_display"),
+                "status": data.get("status"),
+                "status_display": data.get("status_display"),
+                "payment_method": data.get("payment_method"),
+                "is_paid": data.get("is_paid"),
+                "order_time": data.get("order_time"),
+                "company_name": data.get("company_name"),
+                "branch_name": data.get("branch_name"),
+                "store": data.get("store"),
+                "table_number": data.get("table_number"),
+                "customer_name": data.get("customer_name"),
+                "customer_phone": data.get("customer_phone"),
+                "customer_address": data.get("customer_address"),
+                "display_name": data.get("display_name"),
+                "subtotal": data.get("subtotal"),
+                "tax_amount": data.get("tax_amount"),
+                "discount_amount": data.get("discount_amount"),
+                "service_charge_amount": data.get("service_charge_amount"),
+                "tip_amount": data.get("tip_amount"),
+                "total_amount": data.get("total_amount"),
+                "currency": data.get("currency", "BDT"),
+                "order_items": data.get("order_items", []),
+                "notes": order.notes,
+            },
+        }
+
+        return Response(invoice_data, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response(
+            {"success": False, "error": "Failed to retrieve invoice"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
 class SaleViewSet(viewsets.ModelViewSet):
     # queryset = Product.objects.all()
     serializer_class = SaleSerializer
@@ -337,6 +421,11 @@ class POSOrderViewSet(viewsets.ModelViewSet):
         if status_param:
             queryset = queryset.filter(status=status_param)
 
+        # Filter by payment method
+        payment_method = self.request.query_params.get("payment_method")
+        if payment_method:
+            queryset = queryset.filter(payment_method=payment_method)
+
         # Filter by table number
         table_number = self.request.query_params.get("table_number")
         if table_number:
@@ -372,12 +461,23 @@ class POSOrderViewSet(viewsets.ModelViewSet):
             )
             queryset = queryset.filter(order_time__lt=end_dt)
 
-        return apply_company_branch_scope(
+        # Apply company/branch scoping
+        queryset = apply_company_branch_scope(
             request=self.request,
             queryset=queryset,
             company_id_field="companyId_id",
             branch_id_field="branch_id",
         )
+
+        # STRICT BRANCH FILTERING: When a specific branch_id is requested,
+        # exclude orders with NULL branch to prevent cross-branch data leakage
+        branch_id = self.request.query_params.get(
+            "branch_id"
+        ) or self.request.query_params.get("branchId")
+        if branch_id:
+            queryset = queryset.filter(branch_id=branch_id)
+
+        return queryset
 
     def _resolve_company(self):
         user = self.request.user
@@ -413,29 +513,62 @@ class POSOrderViewSet(viewsets.ModelViewSet):
 
         company = None
         branch = None
+        branch_id = request.query_params.get("branch_id") or request.query_params.get(
+            "branchId"
+        )
         if not is_unrestricted_user(request.user):
             company = self._resolve_company()
             if not company:
                 raise PermissionDenied("User is not associated with a company")
 
             allowed_branch_ids = get_allowed_branch_ids_for_user(request.user)
-            branch_id = request.query_params.get(
-                "branch_id"
-            ) or request.query_params.get("branchId")
+            allowed_branch_ids_str = (
+                {str(i) for i in allowed_branch_ids}
+                if allowed_branch_ids is not None
+                else None
+            )
             if branch_id:
+                branch_id_str = str(branch_id)
                 if (
-                    allowed_branch_ids is not None
-                    and branch_id not in allowed_branch_ids
+                    allowed_branch_ids_str is not None
+                    and branch_id_str not in allowed_branch_ids_str
                 ):
                     raise PermissionDenied("You do not have access to this branch")
-                branch = (
-                    request.user.branchAccess.filter(id=branch_id).first()
-                    if allowed_branch_ids is not None
-                    else None
-                )
-            elif allowed_branch_ids is not None and len(allowed_branch_ids) == 1:
-                only_branch_id = next(iter(allowed_branch_ids))
+
+                if allowed_branch_ids_str is not None:
+                    branch = request.user.branchAccess.filter(id=branch_id).first()
+                else:
+                    # allowed_branch_ids=None means "all branches within company".
+                    # Still resolve and persist the branch for POS billing.
+                    from company.models import Branch as CompanyBranch
+
+                    branch = (
+                        CompanyBranch.objects.select_related("company")
+                        .filter(id=branch_id, company=company)
+                        .first()
+                    )
+
+                if not branch:
+                    raise PermissionDenied("Invalid branch")
+            elif (
+                allowed_branch_ids_str is not None and len(allowed_branch_ids_str) == 1
+            ):
+                only_branch_id = next(iter(allowed_branch_ids_str))
                 branch = request.user.branchAccess.get(id=only_branch_id)
+
+        else:
+            # For unrestricted users, allow optional branch_id to be recorded
+            # (useful for reporting/filtering).
+            if branch_id:
+                from company.models import Branch as CompanyBranch
+
+                branch = (
+                    CompanyBranch.objects.select_related("company")
+                    .filter(id=branch_id)
+                    .first()
+                )
+                if branch and not company:
+                    company = branch.company
 
         # Retry logic for order number conflicts
         max_retries = 3
