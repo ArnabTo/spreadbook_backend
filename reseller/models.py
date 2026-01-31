@@ -67,6 +67,39 @@ class Reseller(models.Model):
         help_text="Default commission percentage for this reseller",
     )
 
+    # White Label Settings
+    isWhiteLabel = models.BooleanField(
+        default=False,
+        verbose_name=_("Is White Label"),
+        help_text="Whether this reseller has white label branding privileges",
+    )
+    whiteLabelCompanyName = models.CharField(
+        max_length=150,
+        blank=True,
+        null=True,
+        verbose_name=_("White Label Company Name"),
+        help_text="Custom company name displayed in white label dashboard",
+    )
+    whiteLabelLogo = models.URLField(
+        max_length=500,
+        blank=True,
+        null=True,
+        verbose_name=_("White Label Logo URL"),
+        help_text="URL of the white label logo image",
+    )
+    whiteLabelPrimaryColor = models.CharField(
+        max_length=7,
+        default="#8B4513",
+        verbose_name=_("White Label Primary Color"),
+        help_text="Primary color for white label branding (hex format)",
+    )
+    whiteLabelSecondaryColor = models.CharField(
+        max_length=7,
+        default="#A0522D",
+        verbose_name=_("White Label Secondary Color"),
+        help_text="Secondary color for white label branding (hex format)",
+    )
+
     # Status
     status = models.CharField(
         max_length=20,

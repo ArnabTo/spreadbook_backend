@@ -484,11 +484,13 @@ class BranchViewSet(viewsets.ModelViewSet):
             # Further restrict non-admin users to their branchAccess (if present)
             if role not in {"super_admin", "admin", "reseller"}:
                 branch_access = getattr(user, "branchAccess", None)
-                if branch_access and branch_access != ["all"]:
-                    accessible_branch_ids = [
-                        int(bid) for bid in branch_access if str(bid).isdigit()
-                    ]
-                    queryset = queryset.filter(id__in=accessible_branch_ids)
+                if branch_access:
+                    # branchAccess is a ManyToManyField, need to call .all() to get queryset
+                    accessible_branch_ids = list(
+                        branch_access.all().values_list("id", flat=True)
+                    )
+                    if accessible_branch_ids:
+                        queryset = queryset.filter(id__in=accessible_branch_ids)
 
         # Filter by company if specified
         company_id = self.request.query_params.get("company", None)

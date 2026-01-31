@@ -7,6 +7,64 @@ from .unit_model import Unit
 from company.models import Company, Branch
 
 
+class ProductBranchInventory(models.Model):
+    """Per-branch inventory + price overrides for a shared Product catalog.
+
+    This enables: shared product list across branches (no 10k-row duplication),
+    while keeping price + stock isolated per branch.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name="branch_inventory",
+        db_index=True,
+    )
+    companyId = models.ForeignKey(
+        Company,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_index=True,
+        related_name="product_branch_inventory",
+    )
+    branch = models.ForeignKey(
+        Branch,
+        on_delete=models.CASCADE,
+        related_name="product_branch_inventory",
+        db_index=True,
+    )
+
+    # Branch-specific pricing
+    price = models.FloatField(default=0, blank=True, null=True)
+    priceSale = models.FloatField(default=0, blank=True, null=True)
+    regular_price = models.FloatField(default=0, blank=True, null=True)
+
+    # Branch-specific stock
+    in_stock = models.IntegerField(default=0)
+    available = models.IntegerField(default=0)
+
+    # Keep the same semantics as Product.low_stock_threshold (but branch-tunable later if needed)
+    low_stock_threshold = models.PositiveIntegerField(default=20)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Product Branch Inventory"
+        verbose_name_plural = "Product Branch Inventories"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["product", "branch"], name="uniq_product_branch_inventory"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.product_id} @ {self.branch_id}"
+
+
 class InventoryCategory(models.Model):
     """Inventory categories for better organization"""
 
@@ -153,7 +211,16 @@ class InventoryItem(models.Model):
         super().save(*args, **kwargs)
 
         # Keep Product.in_stock in sync for POS sales stock display
-        if sync_product and self.product_id:
+        # IMPORTANT: only sync when the Product is explicitly scoped to this branch.
+        # Shared catalog Products (branch=NULL) must NOT have their global `in_stock`
+        # overwritten by a single branch's InventoryItem.
+        if (
+            sync_product
+            and self.product_id
+            and getattr(self.product, "branch_id", None)
+            and str(getattr(self.product, "branch_id", ""))
+            == str(getattr(self.branch, "id", ""))
+        ):
             desired_stock = int(self.current_stock)
             product = self.product
             update_fields = []

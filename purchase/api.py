@@ -8,8 +8,13 @@ from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
-from .models import PurchaseOrder, PurchaseOrderItem, PurchaseRequisition
-from .serializers import PurchaseOrderSerializer, PurchaseRequisitionSerializer
+from .models import PurchaseOrder, PurchaseOrderItem, PurchaseRequisition, QuickPurchase
+from .serializers import (
+    PurchaseOrderSerializer,
+    PurchaseRequisitionSerializer,
+    QuickPurchaseSerializer,
+    QuickPurchaseConvertSerializer,
+)
 
 
 def _is_int_decimal(value: Decimal) -> bool:
@@ -138,6 +143,113 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return super().update(request, *args, **kwargs)
+
+
+class QuickPurchaseViewSet(viewsets.ModelViewSet):
+    """Immediate buy records and conversion into Product stock."""
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = QuickPurchaseSerializer
+    queryset = QuickPurchase.objects.all().order_by("-created_at")
+
+    def get_permissions(self):
+        return _get_permission_instances()
+
+    def get_queryset(self):
+        # Keep consistent with other APIs: apply company/branch scoping when available.
+        from common.drf_scoping import apply_company_branch_scope
+
+        qs = super().get_queryset()
+        return apply_company_branch_scope(
+            request=self.request,
+            queryset=qs,
+            company_id_field="companyId_id",
+            branch_id_field="branch_id",
+        )
+
+    def perform_create(self, serializer):
+        # Auto-calc remaining_qty.
+        data = serializer.validated_data
+        purchased = int(data.get("qty_purchased") or 0)
+        sold = int(data.get("qty_sold") or 0)
+        remaining = max(purchased - sold, 0)
+
+        # Capture company/branch from request user when available.
+        company = getattr(self.request.user, "companyId", None)
+        branch = None
+        if (
+            hasattr(self.request.user, "branchAccess")
+            and self.request.user.branchAccess.exists()
+        ):
+            branch = self.request.user.branchAccess.first()
+
+        serializer.save(
+            remaining_qty=remaining,
+            companyId=company,
+            branch=branch,
+        )
+
+    @action(detail=True, methods=["post"], url_path="convert-to-product")
+    def convert_to_product(self, request, pk=None):
+        """Convert remaining qty into a Product row with stock, so it appears in Product list."""
+
+        from django.db import transaction
+        from products.models.product_model import Product
+
+        qp: QuickPurchase = self.get_object()
+        if qp.status != "pending":
+            return Response(
+                {"error": "Only pending quick purchases can be converted"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        remaining = int(qp.remaining_qty or 0)
+        if remaining <= 0:
+            return Response(
+                {"error": "No remaining quantity to add to product list"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        payload = QuickPurchaseConvertSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        v = payload.validated_data
+
+        name = (v.get("name") or qp.name or "").strip() or qp.name
+        category = (v.get("category") or qp.category or "").strip()
+        code = v.get("code") if "code" in v else qp.code
+        sku = v.get("sku") if "sku" in v else qp.sku
+
+        with transaction.atomic():
+            # Create a Product (new catalog item). We intentionally do NOT attempt
+            # to auto-merge by name to avoid accidentally mixing different items.
+            product = Product.objects.create(
+                companyId=qp.companyId,
+                branch=qp.branch,
+                name=name,
+                category=category or "products",
+                code=(
+                    str(code).strip()
+                    if code is not None and str(code).strip()
+                    else None
+                ),
+                sku=(
+                    str(sku).strip() if sku is not None and str(sku).strip() else None
+                ),
+                price=float(qp.unit_price or 0),
+                in_stock=remaining,
+                quantity=remaining,
+                totalPurchase=remaining,
+                out_of_stock=False,
+                status="in stock",
+                inventoryType="in stock",
+                available=remaining,
+            )
+
+            qp.product = product
+            qp.status = "converted"
+            qp.save(update_fields=["product", "status", "updated_at"])
+
+        return Response(QuickPurchaseSerializer(qp).data, status=status.HTTP_200_OK)
 
     def partial_update(self, request, *args, **kwargs):
         requisition: PurchaseRequisition = self.get_object()

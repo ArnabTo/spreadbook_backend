@@ -258,7 +258,7 @@ class Company(models.Model):
 
 
 class Branch(models.Model):
-    """Restaurant branch model for multi-location management"""
+    """Shop branch model for multi-location management"""
 
     company = models.ForeignKey(
         Company,

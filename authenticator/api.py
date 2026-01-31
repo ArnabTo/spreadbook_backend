@@ -463,9 +463,9 @@ class CreateCompanyUserViewSet(viewsets.ModelViewSet):
 
 @api_view(["POST"])
 @permission_classes([permissions.AllowAny])
-def restaurant_login(request):
+def megashop_login(request):
     """
-    Custom login endpoint that matches frontend expectations
+    MegaShop login endpoint that matches frontend expectations
     Accepts: username/email, password
     Returns: user data with JWT tokens
     """
@@ -473,16 +473,21 @@ def restaurant_login(request):
         identifier = request.data.get("username") or request.data.get("email")
         password = request.data.get("password")
 
+        if isinstance(identifier, str):
+            identifier = identifier.strip()
+
         if not identifier or not password:
             return Response(
                 {"error": "Username/email and password are required"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Find user by username OR email (case-insensitive)
+        # Find user by username OR email OR phone (case-insensitive)
         user = (
             GenUser.objects.filter(
-                Q(username__iexact=identifier) | Q(email__iexact=identifier)
+                Q(username__iexact=identifier)
+                | Q(email__iexact=identifier)
+                | Q(phoneNumber__iexact=identifier)
             )
             .order_by("id")
             .first()

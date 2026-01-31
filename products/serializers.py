@@ -141,6 +141,68 @@ class ProductSerializer(serializers.ModelSerializer):
         model = Product
         fields = "__all__"
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+
+        request = self.context.get("request")
+        if not request:
+            return data
+
+        branch_id = request.query_params.get("branch_id") or request.query_params.get(
+            "branchId"
+        )
+        if not branch_id:
+            return data
+
+        # Fast path: ProductViewSet prefetches a single-row list into this attr.
+        inv_list = getattr(instance, "_branch_inventory_for_request", None)
+        inv = inv_list[0] if isinstance(inv_list, list) and inv_list else None
+
+        # Safe fallback (should be rare)
+        if inv is None:
+            try:
+                from products.models import ProductBranchInventory
+
+                inv = (
+                    ProductBranchInventory.objects.filter(
+                        product_id=getattr(instance, "id", None),
+                        branch_id=branch_id,
+                    )
+                    .only(
+                        "price",
+                        "priceSale",
+                        "regular_price",
+                        "in_stock",
+                        "available",
+                    )
+                    .first()
+                )
+            except Exception:
+                inv = None
+
+        if inv is None:
+            # No per-branch override row yet.
+            # - If Product is explicitly branch-scoped to this branch (legacy data), keep Product fields.
+            # - If Product is shared (branch=NULL) or scoped to a different branch, the branch's stock is 0.
+            try:
+                product_branch_id = getattr(instance, "branch_id", None)
+                if product_branch_id and str(product_branch_id) == str(branch_id):
+                    return data
+
+                data["in_stock"] = 0
+                data["available"] = 0
+                return data
+            except Exception:
+                return data
+
+        # Override only the branch-scoped fields; keep shared catalog fields intact.
+        data["price"] = inv.price
+        data["priceSale"] = inv.priceSale
+        data["regular_price"] = inv.regular_price
+        data["in_stock"] = inv.in_stock
+        data["available"] = inv.available
+        return data
+
     def update(self, instance, validated_data):
         return super().update(instance, validated_data)
 

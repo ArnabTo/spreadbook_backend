@@ -8,6 +8,7 @@ from .inventory_model import (
     InventoryCategory,
     StockMovement,
     ProductStockMovement,
+    ProductBranchInventory,
 )
 
 from .catalog_extras import (
@@ -26,6 +27,7 @@ __all__ = [
     "InventoryCategory",
     "StockMovement",
     "ProductStockMovement",
+    "ProductBranchInventory",
     "ProductType",
     "GenericName",
     "Brand",

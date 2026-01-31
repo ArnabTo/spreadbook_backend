@@ -62,7 +62,8 @@ class POSOrderAPITest(TestCase):
 
         order = Sale.objects.filter(order_number__isnull=False).first()
         self.assertIsNotNone(order)
-        self.assertEqual(order.order_type, "dine-in")
+        # Backend canonicalizes legacy order_type aliases like "dine-in" into "In-Store".
+        self.assertEqual(order.order_type, "In-Store")
         self.assertEqual(order.table_number, "5")
 
         # Check items were created
@@ -207,3 +208,95 @@ class POSOrderAPITest(TestCase):
 
         order.refresh_from_db()
         self.assertFalse(order.is_return)
+
+    def test_refund_restock_to_inventory_increases_product_stock(self):
+        """Refunds should add refunded quantities back into Product.in_stock when enabled."""
+        from products.models.product_model import Product
+
+        product = Product.objects.create(
+            name="Test Product",
+            price=100.0,
+            in_stock=10,
+        )
+
+        order_data = {
+            "order_type": "In-Store",
+            "payment_method": "cash",
+            "currency": "BDT",
+            "tax_rate": 0.0,
+            "service_charge_rate": 0.0,
+            "tip_amount": 0.0,
+            "items": [
+                {
+                    "id": str(product.id),
+                    "name": "Test Product",
+                    "price": 100.00,
+                    "quantity": 2,
+                    "category": "products",
+                    "preparation_time": 0,
+                }
+            ],
+        }
+
+        create_resp = self.client.post("/api/pos/orders/", order_data, format="json")
+        self.assertEqual(create_resp.status_code, status.HTTP_201_CREATED)
+        order_id = create_resp.data["id"]
+
+        # Stock should be reduced on sale creation.
+        product.refresh_from_db()
+        self.assertEqual(int(product.in_stock or 0), 8)
+
+        # Mark paid (refund requires paid).
+        order = Sale.objects.get(id=order_id)
+        order.status = "paid"
+        order.is_paid = True
+        order.save(update_fields=["status", "is_paid"])
+
+        invoice_item_id = create_resp.data["order_items"][0]["id"]
+
+        # Omit restock_to_inventory => default True.
+        refund_payload = {
+            "payment_method": "cash",
+            "items": [{"invoice_item_id": invoice_item_id, "quantity": 1}],
+        }
+        refund_resp = self.client.post(
+            f"/api/pos/orders/{order_id}/refund/", refund_payload, format="json"
+        )
+        self.assertEqual(refund_resp.status_code, status.HTTP_201_CREATED)
+
+        product.refresh_from_db()
+        self.assertEqual(int(product.in_stock or 0), 9)
+
+    def test_quick_purchase_convert_to_product_creates_stock_item(self):
+        """Quick purchases can be converted into a Product with remaining stock."""
+        # Create a quick purchase: bought 10, sold 4 => remaining 6.
+        qp_payload = {
+            "name": "Quick Item",
+            "category": "products",
+            "unit_cost": "50.00",
+            "unit_price": "80.00",
+            "qty_purchased": 10,
+            "qty_sold": 4,
+            "notes": "Bought for a customer order",
+        }
+        create_resp = self.client.post(
+            "/api/supplychain/purchase/quick-purchases/", qp_payload, format="json"
+        )
+        self.assertEqual(create_resp.status_code, status.HTTP_201_CREATED)
+        qp_id = create_resp.data["uuid"]
+
+        convert_resp = self.client.post(
+            f"/api/supplychain/purchase/quick-purchases/{qp_id}/convert-to-product/",
+            {},
+            format="json",
+        )
+        self.assertEqual(convert_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(convert_resp.data.get("status"), "converted")
+        self.assertIsNotNone(convert_resp.data.get("product_id"))
+
+        # Product should exist with remaining_qty stock.
+        from products.models.product_model import Product
+
+        p = Product.objects.get(id=convert_resp.data["product_id"])
+        self.assertEqual(p.name, "Quick Item")
+        self.assertEqual(int(p.in_stock or 0), 6)

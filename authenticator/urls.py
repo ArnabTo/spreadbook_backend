@@ -6,7 +6,7 @@ from .api import (
     UpdateUserViewSet,
     CreateUserViewSet,
     RestaurantUserViewSet,
-    restaurant_login,
+    megashop_login,
     get_user_profile,
     UserCompanyViewSet,
     UserCompanyBranchViewSet,
@@ -34,7 +34,10 @@ router.register(
 
 # Custom paths for restaurant management system
 urlpatterns = [
-    path("api/auth/restaurant-login/", restaurant_login, name="restaurant-login"),
+    # New preferred MegaShop login endpoint
+    path("api/auth/megashop-login/", megashop_login, name="megashop-login"),
+    # Backward-compatible alias (do not remove yet)
+    path("api/auth/restaurant-login/", megashop_login, name="restaurant-login"),
     path("api/auth/profile/", get_user_profile, name="user-profile"),
 ] + router.urls
 

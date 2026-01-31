@@ -1220,14 +1220,15 @@ class POSOrderCreateSerializer(serializers.Serializer):
                     except Exception:
                         stored_item_id = str(product.id)
 
-                    # Server-trusted pricing for Product lines
+                    # Server-trusted pricing for Product lines (branch-aware)
+                    from products.branch_inventory import get_effective_numbers
+
+                    numbers = get_effective_numbers(product, branch)
                     effective = (
-                        getattr(product, "priceSale", None)
-                        if (getattr(product, "priceSale", 0) or 0) > 0
-                        else getattr(product, "price", None)
+                        numbers.priceSale if numbers.priceSale > 0 else numbers.price
                     )
                     if not effective or float(effective) <= 0:
-                        effective = getattr(product, "regular_price", None) or 0
+                        effective = numbers.regular_price or 0
 
                     # Prefer server pricing, but if the product has no usable price,
                     # optionally allow the POS to supply a manual unit price.
@@ -1241,16 +1242,41 @@ class POSOrderCreateSerializer(serializers.Serializer):
                     title = getattr(product, "name", None) or title
                     category = getattr(product, "category", None) or category
 
-                    # Stock enforcement for MegaShop
-                    current_stock = int(getattr(product, "in_stock", 0) or 0)
+                    # Stock enforcement for MegaShop (branch-aware)
+                    current_stock = int(numbers.in_stock or 0)
                     if (not allow_out_of_stock) and current_stock < quantity:
                         raise serializers.ValidationError(
                             {
                                 "items": f"Insufficient stock for {title}. Available: {current_stock}, requested: {quantity}"
                             }
                         )
-                    product.in_stock = current_stock - quantity
-                    product.save(update_fields=["in_stock", "updateAt"])
+                    if branch is not None:
+                        from products.branch_inventory import adjust_branch_stock
+
+                        adjust_branch_stock(
+                            product,
+                            branch,
+                            delta=-quantity,
+                            reason="POS sale",
+                            notes=f"POS order {str(getattr(order, 'id', ''))}",
+                            updated_by=validated_data.get("user")
+                            or getattr(self.context.get("request"), "user", None),
+                        )
+                    else:
+                        product.in_stock = current_stock - quantity
+                        # Persist stock *and* derived inventory fields to keep list/status accurate.
+                        # Product.save() mutates these fields based on in_stock, but they won't hit DB
+                        # unless included in update_fields.
+                        product.save(
+                            update_fields=[
+                                "in_stock",
+                                "updateAt",
+                                "status",
+                                "inventoryType",
+                                "available",
+                                "out_of_stock",
+                            ]
+                        )
 
                 if menu_item and (unit_price <= 0):
                     # Keep legacy behavior: accept client-sent price for menu items.
@@ -1486,6 +1512,7 @@ class RefundCreateSerializer(serializers.Serializer):
     )
     reason = serializers.CharField(required=False, allow_blank=True)
     payment_method = serializers.CharField(required=False, allow_blank=True)
+    restock_to_inventory = serializers.BooleanField(required=False, default=True)
 
 
 class RefundItemSerializer(serializers.ModelSerializer):

@@ -561,6 +561,10 @@ class Refund(Timestamp):
     reason = models.TextField(blank=True, null=True)
     total_amount = models.FloatField(default=0, help_text="Total refund amount")
 
+    # Inventory integration (MegaShop): when True, refunded quantities were added
+    # back to products.Product.in_stock at refund creation time.
+    restocked_to_inventory = models.BooleanField(default=False)
+
     class Meta:
         ordering = ["-created_at"]
 

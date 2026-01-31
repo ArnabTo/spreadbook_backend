@@ -7,6 +7,7 @@ from .models import (
     PurchaseOrderItem,
     PurchaseRequisition,
     PurchaseRequisitionItem,
+    QuickPurchase,
 )
 
 
@@ -185,3 +186,50 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
             instance.recalc_total()
 
         return instance
+
+
+class QuickPurchaseSerializer(serializers.ModelSerializer):
+    sale_id = serializers.UUIDField(source="sale.id", read_only=True)
+    invoice_item_id = serializers.IntegerField(source="invoice_item.id", read_only=True)
+    product_id = serializers.UUIDField(source="product.id", read_only=True)
+
+    class Meta:
+        model = QuickPurchase
+        fields = [
+            "uuid",
+            "companyId",
+            "branch",
+            "sale_id",
+            "invoice_item_id",
+            "product_id",
+            "name",
+            "category",
+            "code",
+            "sku",
+            "unit_cost",
+            "unit_price",
+            "qty_purchased",
+            "qty_sold",
+            "remaining_qty",
+            "status",
+            "notes",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "uuid",
+            "sale_id",
+            "invoice_item_id",
+            "product_id",
+            "created_at",
+            "updated_at",
+        ]
+
+
+class QuickPurchaseConvertSerializer(serializers.Serializer):
+    """Convert remaining qty into a Product row."""
+
+    name = serializers.CharField(required=False, allow_blank=True)
+    category = serializers.CharField(required=False, allow_blank=True)
+    code = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    sku = serializers.CharField(required=False, allow_blank=True, allow_null=True)

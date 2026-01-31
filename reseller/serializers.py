@@ -30,6 +30,11 @@ class ResellerSerializer(serializers.ModelSerializer):
             "lastActive",
             "created_at",
             "updated_at",
+            "isWhiteLabel",
+            "whiteLabelCompanyName",
+            "whiteLabelLogo",
+            "whiteLabelPrimaryColor",
+            "whiteLabelSecondaryColor",
         ]
         read_only_fields = ["id", "created_at", "updated_at", "lastActive"]
 
@@ -76,6 +81,11 @@ class ResellerListSerializer(serializers.ModelSerializer):
             "totalRevenue",
             "commissionEarned",
             "joinedDate",
+            "isWhiteLabel",
+            "whiteLabelCompanyName",
+            "whiteLabelLogo",
+            "whiteLabelPrimaryColor",
+            "whiteLabelSecondaryColor",
         ]
 
 
@@ -94,6 +104,11 @@ class ResellerCreateUpdateSerializer(serializers.ModelSerializer):
             "country",
             "defaultCommission",
             "status",
+            "isWhiteLabel",
+            "whiteLabelCompanyName",
+            "whiteLabelLogo",
+            "whiteLabelPrimaryColor",
+            "whiteLabelSecondaryColor",
         ]
 
     def validate_email(self, value):

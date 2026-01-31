@@ -85,7 +85,12 @@ def apply_company_branch_scope(
                 from rest_framework.exceptions import PermissionDenied
 
                 raise PermissionDenied("You do not have access to this branch")
-            queryset = queryset.filter(**{branch_id_field: requested_branch_id})
+            # Include shared/global rows (branch is NULL) alongside the requested branch.
+            # This supports shared catalogs/settings that apply to all branches.
+            queryset = queryset.filter(
+                Q(**{branch_id_field: requested_branch_id})
+                | Q(**{f"{branch_id_field}__isnull": True})
+            )
         else:
             queryset = queryset.filter(
                 Q(**{f"{branch_id_field}__in": list(allowed_branch_ids)})

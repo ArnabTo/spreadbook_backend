@@ -705,9 +705,8 @@ class POSOrderViewSet(viewsets.ModelViewSet):
             if existing_item:
                 # Update quantity if item already exists
                 existing_item.quantity += item_data.get("quantity", 1)
-                existing_item.total_price = (
-                    existing_item.quantity * existing_item.unit_price
-                )
+                # InvoiceItem stores numeric values in legacy fields: price/total.
+                existing_item.total = existing_item.quantity * existing_item.price
                 existing_item.save()
             else:
                 # Create new invoice item
@@ -715,17 +714,16 @@ class POSOrderViewSet(viewsets.ModelViewSet):
 
                 try:
                     product = Product.objects.get(id=item_data.get("id"))
+                    unit_price = float(item_data.get("price", product.sale_price or 0))
+                    qty = int(item_data.get("quantity", 1) or 1)
                     InvoiceItem.objects.create(
                         sell_invoice=order,
                         product=product,
                         title=item_data.get("name", product.name),
                         category=item_data.get("category", ""),
-                        quantity=item_data.get("quantity", 1),
-                        unit_price=float(
-                            item_data.get("price", product.sale_price or 0)
-                        ),
-                        total_price=float(item_data.get("quantity", 1))
-                        * float(item_data.get("price", product.sale_price or 0)),
+                        quantity=qty,
+                        price=unit_price,
+                        total=qty * unit_price,
                         preparation_time=item_data.get("preparation_time", 15),
                     )
                 except Product.DoesNotExist:
@@ -786,13 +784,28 @@ class POSOrderViewSet(viewsets.ModelViewSet):
             # Clear existing items and add new ones
             order.items.all().delete()
 
-            for item_data in items_data:
-                from products.models import Product
+            from products.models import Product
 
+            for item_data in items_data:
                 try:
                     product = Product.objects.get(
                         id=item_data.get("menu_item_id", item_data.get("id"))
                     )
+
+                    unit_price = float(
+                        item_data.get(
+                            "unit_price",
+                            item_data.get("price", product.sale_price or 0),
+                        )
+                    )
+                    qty = int(item_data.get("quantity", 1) or 1)
+                    total = float(
+                        item_data.get(
+                            "total_price",
+                            item_data.get("total", qty * unit_price),
+                        )
+                    )
+
                     InvoiceItem.objects.create(
                         sell_invoice=order,
                         product=product,
@@ -800,24 +813,12 @@ class POSOrderViewSet(viewsets.ModelViewSet):
                             "title", item_data.get("name", product.name)
                         ),
                         category=item_data.get("category", ""),
-                        quantity=item_data.get("quantity", 1),
-                        unit_price=float(
-                            item_data.get(
-                                "unit_price",
-                                item_data.get("price", product.sale_price or 0),
-                            )
-                        ),
-                        total_price=float(
-                            item_data.get(
-                                "total_price",
-                                item_data.get("quantity", 1)
-                                * item_data.get(
-                                    "unit_price",
-                                    item_data.get("price", product.sale_price or 0),
-                                ),
-                            )
-                        ),
+                        quantity=qty,
+                        price=unit_price,
+                        total=total,
                         preparation_time=item_data.get("preparation_time", 15),
+                        special_instructions=item_data.get("special_instructions", ""),
+                        status=item_data.get("status", "ordered"),
                     )
                 except (Product.DoesNotExist, ValueError) as e:
                     return Response(
@@ -885,6 +886,9 @@ class POSOrderViewSet(viewsets.ModelViewSet):
         reason = payload.validated_data.get("reason") or ""
         payment_method = (
             payload.validated_data.get("payment_method") or order.payment_method
+        )
+        restock_to_inventory = bool(
+            payload.validated_data.get("restock_to_inventory", True)
         )
 
         # Build a map of refundable quantities per invoice item
@@ -976,8 +980,50 @@ class POSOrderViewSet(viewsets.ModelViewSet):
 
                 total_amount += line_total
 
+                # MegaShop inventory integration: add refunded quantity back to stock.
+                if restock_to_inventory:
+                    product_id = getattr(inv_item, "product_id", None)
+                    if product_id:
+                        from products.models.product_model import Product
+
+                        product = (
+                            Product.objects.select_for_update()
+                            .filter(id=product_id)
+                            .first()
+                        )
+                        if product:
+                            branch = getattr(order, "branch", None)
+                            if branch is not None:
+                                from products.branch_inventory import (
+                                    adjust_branch_stock,
+                                )
+
+                                adjust_branch_stock(
+                                    product,
+                                    branch,
+                                    delta=int(qty),
+                                    reason="Refund restock",
+                                    notes=f"Refund {str(getattr(refund, 'id', ''))}",
+                                    updated_by=request.user,
+                                )
+                            else:
+                                product.in_stock = int(
+                                    getattr(product, "in_stock", 0) or 0
+                                ) + int(qty)
+                                product.save(
+                                    update_fields=[
+                                        "in_stock",
+                                        "updateAt",
+                                        "status",
+                                        "inventoryType",
+                                        "available",
+                                        "out_of_stock",
+                                    ]
+                                )
+
             refund.total_amount = float(total_amount)
-            refund.save(update_fields=["total_amount"])
+            refund.restocked_to_inventory = bool(restock_to_inventory)
+            refund.save(update_fields=["total_amount", "restocked_to_inventory"])
 
             # Professional: mark as returned only if fully refunded.
             recalculate_sale_is_return(order)
@@ -1145,8 +1191,47 @@ class POSRefundViewSet(viewsets.ModelViewSet):
         ):
             raise PermissionDenied("You do not have permission to delete this refund")
 
+        from django.db import transaction
+
         sale = instance.sale
-        resp = super().destroy(request, *args, **kwargs)
-        if sale:
-            recalculate_sale_is_return(sale)
-        return resp
+
+        with transaction.atomic():
+            # If this refund previously restocked inventory, rollback that stock change.
+            if getattr(instance, "restocked_to_inventory", False):
+                from products.models.product_model import Product
+
+                for ri in instance.items.select_related("invoice_item__product").all():
+                    inv_item = ri.invoice_item
+                    product_id = getattr(inv_item, "product_id", None)
+                    if not product_id:
+                        continue
+
+                    product = (
+                        Product.objects.select_for_update()
+                        .filter(id=product_id)
+                        .first()
+                    )
+                    if not product:
+                        continue
+
+                    current = int(getattr(product, "in_stock", 0) or 0)
+                    next_stock = max(0, current - int(ri.quantity or 0))
+                    if next_stock == current:
+                        continue
+
+                    product.in_stock = next_stock
+                    product.save(
+                        update_fields=[
+                            "in_stock",
+                            "updateAt",
+                            "status",
+                            "inventoryType",
+                            "available",
+                            "out_of_stock",
+                        ]
+                    )
+
+            resp = super().destroy(request, *args, **kwargs)
+            if sale:
+                recalculate_sale_is_return(sale)
+            return resp

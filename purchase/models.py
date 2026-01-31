@@ -253,3 +253,85 @@ class PurchaseOrderItem(models.Model):
 
     def __str__(self):
         return f"{self.purchase_order.po_number} - {self.name}"
+
+
+class QuickPurchase(Timestamp):
+    """Record an immediate purchase made to fulfill a sale.
+
+    Use case: the shop doesn't have the item in catalog/stock, but the customer
+    wants it now. Cashier buys it instantly, bills the customer, and any
+    remaining qty can later be converted into a proper Product with stock.
+    """
+
+    STATUS_CHOICES = (
+        ("pending", "Pending"),
+        ("converted", "Converted"),
+        ("cancelled", "Cancelled"),
+    )
+
+    uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # Multi-tenant scoping (optional; may be null for unrestricted users)
+    companyId = models.ForeignKey(
+        "company.Company",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_index=True,
+        related_name="quick_purchases",
+    )
+    branch = models.ForeignKey(
+        "company.Branch",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_index=True,
+        related_name="quick_purchases",
+    )
+
+    # Link back to the sale and invoice item (optional)
+    sale = models.ForeignKey(
+        "sales.Sale",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="quick_purchases",
+    )
+    invoice_item = models.ForeignKey(
+        "sales.InvoiceItem",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="quick_purchases",
+    )
+
+    # When converted, we attach the created Product.
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="quick_purchases",
+    )
+
+    name = models.CharField(max_length=255)
+    category = models.CharField(max_length=100, default="", blank=True)
+    code = models.CharField(max_length=50, null=True, blank=True)
+    sku = models.CharField(max_length=100, null=True, blank=True)
+
+    # Prices
+    unit_cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    unit_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    qty_purchased = models.PositiveIntegerField(default=0)
+    qty_sold = models.PositiveIntegerField(default=0)
+    remaining_qty = models.PositiveIntegerField(default=0)
+
+    status = models.CharField(
+        max_length=20, choices=STATUS_CHOICES, default="pending", db_index=True
+    )
+
+    notes = models.TextField(null=True, blank=True)
+
+    def __str__(self):
+        return f"QuickPurchase {str(self.uuid)[:8]} - {self.name} ({self.status})"
