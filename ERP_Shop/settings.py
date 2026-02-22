@@ -102,7 +102,7 @@ else:
 # )
 
 if IS_PRODUCTION:
-    ALLOWED_HOSTS = ['apibiz.hellobiz.net', 'www.apibiz.hellobiz.net']
+    ALLOWED_HOSTS = ["apibiz.hellobiz.net", "www.apibiz.hellobiz.net"]
     # SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     # SESSION_COOKIE_SECURE = True
     # CSRF_COOKIE_SECURE = True
@@ -112,7 +112,7 @@ if IS_PRODUCTION:
     CSRF_COOKIE_SECURE = True
     SECURE_SSL_REDIRECT = True
 else:
-    ALLOWED_HOSTS = ['*', "192.168.0.101", "192.168.0.15:8000"]
+    ALLOWED_HOSTS = ["*", "192.168.0.101", "192.168.0.15:8000"]
     SESSION_COOKIE_SECURE = False
     CSRF_COOKIE_SECURE = False
     SECURE_SSL_REDIRECT = False
@@ -326,6 +326,9 @@ LOCAL_APPS = [
 
 INSTALLED_APPS = DJANGO_COMMON_APPS + LOCAL_APPS + THIRD_PARTY_APPS
 
+# Import-Export settings for large file handling
+IMPORT_EXPORT_TMP_STORAGE_CLASS = "import_export.tmp_storages.CacheStorage"
+
 
 # If auth is disabled, patch common DRF auth/permission classes so that viewsets
 # that hardcode TokenAuthentication/IsAuthenticated won't block requests.
@@ -426,6 +429,9 @@ else:
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
             "NAME": BASE_DIR / "db.sqlite3",
+            "OPTIONS": {
+                "timeout": 20,
+            },
         }
     }
 

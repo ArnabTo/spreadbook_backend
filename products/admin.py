@@ -1,4 +1,6 @@
 from import_export.admin import ImportExportModelAdmin
+from import_export import fields, resources, exceptions
+from import_export.widgets import ForeignKeyWidget
 
 from django.contrib import admin
 from django.utils.html import format_html
@@ -14,6 +16,218 @@ from .models.inventory_model import (
     StockMovement,
     ProductStockMovement,
 )
+
+
+class GenericNameByNameOrCreateWidget(ForeignKeyWidget):
+    def __init__(self, model, field="pk", *args, **kwargs):
+        super().__init__(model, field, *args, **kwargs)
+        self.cache = {}
+
+    def clean(self, value, row=None, *args, **kwargs):
+        value = (value or "").strip()
+        if not value:
+            return None
+
+        if value in self.cache:
+            return self.cache[value]
+
+        existing = (
+            GenericName.objects.filter(name__iexact=value).order_by("createdAt").first()
+        )
+        if existing:
+            self.cache[value] = existing
+            return existing
+
+        new_obj = GenericName.objects.create(name=value)
+        self.cache[value] = new_obj
+        return new_obj
+
+
+class ProductImportResource(resources.ModelResource):
+    ## foreignkey fields handeling
+    generic_name = fields.Field(
+        attribute="generic_name",
+        column_name="generic_name",
+        widget=GenericNameByNameOrCreateWidget(GenericName, "name"),
+    )
+    HEADER_ALIASES = {
+        "brand name": "brand_name",
+        "dosage form": "dosage_form",
+        "generic": "generic_name",
+        "weight": "weight",
+        "manufacturer": "manufacturer",
+        "unit price": "price",
+        "name": "name",
+        "code": "code",
+        "sku": "sku",
+        "category": "category",
+        "quantity": "quantity",
+        "in stock": "in_stock",
+        "supplier price": "supplier_price",
+        "regular price": "regular_price",
+        "price sale": "priceSale",
+        "description": "description",
+        "country": "country",
+        "gender": "gender",
+        "publish": "publish",
+        "taxes": "taxes",
+        "inventory type": "inventoryType",
+        "total ratings": "totalRatings",
+        "total sold": "totalSold",
+        "total reviews": "totalReviews",
+        "available": "available",
+        "sub description": "subDescription",
+        "size": "size",
+        "color": "color",
+        "height": "height",
+        "shape": "shape",
+        "material type": "material_type",
+        "technology": "technology",
+        "uses for product": "uses_for_product",
+        "mfg date": "mfg_date",
+        "exp date": "exp_date",
+        "prescription required": "prescription_required",
+        "controlled substance": "controlled_substance",
+        "strength": "strength",
+        "mrp": "mrp",
+        "status": "status",
+        "count sold": "count_sold",
+        "recently sold": "recently_sold",
+        "recently added": "recently_added",
+        "recently viewed": "recently_viewed",
+        "recently updated": "recently_updated",
+    }
+
+    class Meta:
+        model = Product
+        fields = (
+            "name",
+            "code",
+            "sku",
+            "category",
+            "brand_name",
+            "manufacturer",
+            "description",
+            "price",
+            "priceSale",
+            "regular_price",
+            "supplier_price",
+            "taxes",
+            "in_stock",
+            "quantity",
+            "available",
+            "totalSold",
+            "totalRatings",
+            "totalReviews",
+            "country",
+            "gender",
+            "publish",
+            "inventoryType",
+            "subDescription",
+            "dosage_form",
+            "strength",
+            "weight",
+            "size",
+            "color",
+            "height",
+            "shape",
+            "material_type",
+            "technology",
+            "uses_for_product",
+            "mfg_date",
+            "exp_date",
+            "prescription_required",
+            "controlled_substance",
+            "mrp",
+            "status",
+            "count_sold",
+            "recently_sold",
+            "recently_added",
+            "recently_viewed",
+            "recently_updated",
+            "generic_name",
+        )
+        import_id_fields = []
+        use_bulk = True
+        batch_size = 2000
+        report_skipped = True
+        skip_unchanged = False
+
+    @classmethod
+    def _normalize_header(cls, header):
+        if not isinstance(header, str):
+            return ""
+        return " ".join(header.replace("_", " ").strip().split()).lower()
+
+    @staticmethod
+    def _has_value(value):
+        return value is not None and str(value).strip() != ""
+
+    def before_import(self, dataset, using_transactions, dry_run, **kwargs):
+        if not dataset.headers:
+            return
+
+        normalized_headers = []
+        for header in dataset.headers:
+            normalized = self._normalize_header(header)
+            mapped_field = self.HEADER_ALIASES.get(
+                normalized, normalized.replace(" ", "_")
+            )
+            normalized_headers.append(mapped_field)
+        dataset.headers = normalized_headers
+
+        # Pre-create GenericName objects in bulk for better performance
+        generic_index = None
+        try:
+            generic_index = normalized_headers.index("generic_name")
+        except ValueError:
+            pass
+
+        if generic_index is not None:
+            existing_generics = set(GenericName.objects.values_list("name", flat=True))
+            generics_to_create = set()
+            for row in dataset:
+                value = (row[generic_index] or "").strip()
+                if (
+                    value
+                    and value not in existing_generics
+                    and value not in generics_to_create
+                ):
+                    generics_to_create.add(value)
+
+            if generics_to_create:
+                GenericName.objects.bulk_create(
+                    [GenericName(name=name) for name in generics_to_create]
+                )
+                print(f"Pre-created {len(generics_to_create)} GenericName objects")
+
+    def before_import_row(self, row, **kwargs):
+        # Clean price fields if they are strings
+        price_fields = ["price", "priceSale", "regular_price", "supplier_price", "mrp"]
+        for field in price_fields:
+            if field in row and isinstance(row[field], str):
+                cleaned = (
+                    row[field]
+                    .replace(",", "")
+                    .replace("৳", "")
+                    .replace("$", "")
+                    .strip()
+                )
+                if cleaned:
+                    try:
+                        row[field] = float(cleaned)
+                    except ValueError:
+                        row[field] = None
+
+        # Skip row if all mapped fields are empty
+        if not any(self._has_value(value) for value in row.values()):
+            raise exceptions.ImportError("Skipping empty row")
+
+    def import_row(self, row, instance_loader, **kwargs):
+        # Only import fields that exist on the model
+        model_fields = {f.name for f in self._meta.model._meta.get_fields()}
+        cleaned_row = {k: v for k, v in row.items() if k in model_fields}
+        return super().import_row(cleaned_row, instance_loader, **kwargs)
 
 
 @admin.register(ProductStockMovement)
@@ -33,6 +247,8 @@ class ProductStockMovementAdmin(admin.ModelAdmin):
 
 @admin.register(Product)
 class ProductAdmin(ImportExportModelAdmin):
+    resource_class = ProductImportResource
+
     class ProductBarcodeInline(admin.TabularInline):
         model = ProductBarcode
         extra = 1
@@ -93,6 +309,7 @@ class ProductAdmin(ImportExportModelAdmin):
                     "taxes",
                     "inventoryType",
                     "sku",
+                    "dosage_form",
                     "price",
                     "coverUrl",
                     "totalRatings",
