@@ -216,7 +216,7 @@ class ProductPostSerializer(serializers.ModelSerializer):
     # uploaded_images = serializers.ListField(
     #      child = serializers.ImageField(max_length = 1000000, allow_empty_file = False, use_url = False),
     #      write_only=True)
-    sizes = SizeSerializer(many=True, required=False)  # mt
+    sizes = SizeSerializer(many=True, required=False)  
     ratings = RatingSerializer(many=True, required=False)
     reviews = ReviewSerializer(many=True, required=False)
     tags = TagSerializer(many=True, required=False)
@@ -227,6 +227,7 @@ class ProductPostSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
     def create(self, validated_data):
+        # print("Creating product with data:", validated_data)
         # uploaded_images = validated_data.pop("uploaded_images")
         newlabel_data = validated_data.pop("newLabel")
         salelabel_data = validated_data.pop("saleLabel")

@@ -579,6 +579,7 @@ REST_FRAMEWORK = {
         ("ERP_Shop.demo_auth.DemoAuthentication",)
         if DJANGO_DISABLE_AUTH
         else (
+            "rest_framework.authentication.SessionAuthentication",
             "rest_framework.authentication.TokenAuthentication",
             "rest_framework_simplejwt.authentication.JWTAuthentication",
         )
