@@ -498,6 +498,15 @@ class InvoiceItem(models.Model):
         blank=True, null=True, help_text="Special cooking instructions"
     )
 
+    # Dual-unit / pharmacy: True when quantity is expressed in secondary (smaller) units.
+    sold_in_secondary_unit = models.BooleanField(
+        default=False,
+        help_text=(
+            "True when the sold quantity is in secondary units (e.g. Strips), "
+            "False when in primary units (e.g. Box)."
+        ),
+    )
+
     # Order status tracking
     status = models.CharField(
         max_length=20,

@@ -137,9 +137,17 @@ class ProductSerializer(serializers.ModelSerializer):
     tags = serializers.StringRelatedField(many=True, required=False)
     colors = serializers.StringRelatedField(many=True, required=False)
 
+    # Dual-unit read-only helpers
+    unit_name = serializers.CharField(source="unit.name", read_only=True, default=None)
+    secondary_unit_name = serializers.CharField(
+        source="secondary_unit.name", read_only=True, default=None
+    )
+
     class Meta:
         model = Product
         fields = "__all__"
+        # Declare extra fields so they appear in the serialized output
+        read_only_fields = ("unit_name", "secondary_unit_name", "in_stock_secondary")
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -216,15 +224,22 @@ class ProductPostSerializer(serializers.ModelSerializer):
     # uploaded_images = serializers.ListField(
     #      child = serializers.ImageField(max_length = 1000000, allow_empty_file = False, use_url = False),
     #      write_only=True)
-    sizes = SizeSerializer(many=True, required=False)  
+    sizes = SizeSerializer(many=True, required=False)
     ratings = RatingSerializer(many=True, required=False)
     reviews = ReviewSerializer(many=True, required=False)
     tags = TagSerializer(many=True, required=False)
     colors = ColorSerializer(many=True, required=False)
 
+    # Dual-unit read-only helpers
+    unit_name = serializers.CharField(source="unit.name", read_only=True, default=None)
+    secondary_unit_name = serializers.CharField(
+        source="secondary_unit.name", read_only=True, default=None
+    )
+
     class Meta:
         model = Product
         fields = "__all__"
+        read_only_fields = ("unit_name", "secondary_unit_name", "in_stock_secondary")
 
     def create(self, validated_data):
         # print("Creating product with data:", validated_data)

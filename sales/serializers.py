@@ -1212,6 +1212,9 @@ class POSOrderCreateSerializer(serializers.Serializer):
                 category = item_data.get("category", "")
                 client_unit_price = Decimal(str(item_data.get("price") or 0))
                 unit_price = client_unit_price
+                # Whether the POS sold this item in secondary units (e.g. 1 Strip, not 1 Box).
+                # Resolved fully inside `if product:` block below once we have the product record.
+                _sold_in_sec = False
 
                 if product:
                     # If the payload used a product code as "id", normalize stored id to UUID.
@@ -1242,15 +1245,35 @@ class POSOrderCreateSerializer(serializers.Serializer):
                     title = getattr(product, "name", None) or title
                     category = getattr(product, "category", None) or category
 
-                    # Stock enforcement for MegaShop (branch-aware)
-                    current_stock = int(numbers.in_stock or 0)
+                    # Determine unit mode: secondary (e.g. Strip) vs primary (e.g. Box).
+                    _factor = int(getattr(product, "unit_conversion_factor", 0) or 0)
+                    _sec_id = getattr(product, "secondary_unit_id", None)
+                    _sold_in_sec = (
+                        bool(item_data.get("sold_in_secondary_unit"))
+                        and _sec_id is not None
+                        and _factor > 0
+                    )
+
+                    # Stock enforcement – validate against the correct stock pool.
+                    # Secondary-unit products: validation uses in_stock_secondary (e.g. total Strips).
+                    # Primary-only products: use in_stock (Boxes or whole units).
+                    if _sold_in_sec:
+                        current_stock = int(getattr(product, "in_stock_secondary", 0) or 0)
+                    else:
+                        current_stock = int(numbers.in_stock or 0)
+
                     if (not allow_out_of_stock) and current_stock < quantity:
                         raise serializers.ValidationError(
                             {
                                 "items": f"Insufficient stock for {title}. Available: {current_stock}, requested: {quantity}"
                             }
                         )
-                    if branch is not None:
+                    if branch is not None and not _sold_in_sec:
+                        # Branch + primary-unit sale: delegate to branch inventory helper.
+                        # Secondary-unit sales are handled by the Django post_save signal
+                        # because adjust_branch_stock treats delta as whole-box units and
+                        # would incorrectly reduce in_stock (and trigger Product.save which
+                        # recomputes in_stock_secondary = boxes × factor).
                         from products.branch_inventory import adjust_branch_stock
 
                         adjust_branch_stock(
@@ -1262,21 +1285,8 @@ class POSOrderCreateSerializer(serializers.Serializer):
                             updated_by=validated_data.get("user")
                             or getattr(self.context.get("request"), "user", None),
                         )
-                    else:
-                        product.in_stock = current_stock - quantity
-                        # Persist stock *and* derived inventory fields to keep list/status accurate.
-                        # Product.save() mutates these fields based on in_stock, but they won't hit DB
-                        # unless included in update_fields.
-                        product.save(
-                            update_fields=[
-                                "in_stock",
-                                "updateAt",
-                                "status",
-                                "inventoryType",
-                                "available",
-                                "out_of_stock",
-                            ]
-                        )
+                    # All other cases (non-branch, or branch+secondary-unit) are handled by
+                    # the Django post_save signal (_invoice_item_stock_deduct in signals.py).
 
                 if menu_item and (unit_price <= 0):
                     # Keep legacy behavior: accept client-sent price for menu items.
@@ -1317,6 +1327,7 @@ class POSOrderCreateSerializer(serializers.Serializer):
                     special_instructions=item_data.get(
                         "notes", ""
                     ),  # Save per-item notes
+                    sold_in_secondary_unit=_sold_in_sec,
                 )
 
                 subtotal += item.total

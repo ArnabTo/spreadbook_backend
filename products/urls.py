@@ -7,6 +7,7 @@ from .api import (
     NewLabelSet,
     SaleLabelSet,
     CategoryViewSet,
+    UnitViewSet,
     PosProductIndexView,
     ProductOptionsView,
     ProductTypeViewSet,
@@ -33,6 +34,7 @@ router.register("api/product/newlabel", NewLabelSet, "product-newLabel")
 router.register("api/product/salelabel", SaleLabelSet, "product-saleLabel")
 
 router.register("api/product/category", CategoryViewSet, "category")
+router.register("api/product/units", UnitViewSet, "product-units")
 router.register("api/product/color", ColorViewSet, "color")
 router.register("api/product/size", SizeViewSet, "size")
 

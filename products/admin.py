@@ -5,6 +5,7 @@ from import_export.widgets import ForeignKeyWidget
 from django.contrib import admin
 from django.utils.html import format_html
 
+from company.models import Company, Branch
 from .models import Category, Product, Unit
 from .models import ProductType, GenericName, Brand, ProductBarcode, ProductBatch
 from .models.product_model import NewLabel, SaleLabel, Size, Image, Tag, Color
@@ -24,7 +25,7 @@ class GenericNameByNameOrCreateWidget(ForeignKeyWidget):
         self.cache = {}
 
     def clean(self, value, row=None, *args, **kwargs):
-        value = (value or "").strip()
+        value = str(value).strip() if value is not None else ""
         if not value:
             return None
 
@@ -43,17 +44,80 @@ class GenericNameByNameOrCreateWidget(ForeignKeyWidget):
         return new_obj
 
 
+class CompanyByNameWidget(ForeignKeyWidget):
+    """Look up Company by name (case-insensitive)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(Company, "name", *args, **kwargs)
+        self._cache = {}
+
+    def clean(self, value, row=None, *args, **kwargs):
+        value = str(value).strip() if value is not None else ""
+        if not value:
+            return None
+        key = value.lower()
+        if key not in self._cache:
+            obj = Company.objects.filter(name__iexact=value).first()
+            # Fallback: try numeric PK
+            if obj is None and value.isdigit():
+                obj = Company.objects.filter(pk=int(value)).first()
+            self._cache[key] = obj
+        return self._cache[key]
+
+
+class BranchByNameOrCodeWidget(ForeignKeyWidget):
+    """Look up Branch by name first, then by code (case-insensitive)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(Branch, "name", *args, **kwargs)
+        self._cache = {}
+
+    def clean(self, value, row=None, *args, **kwargs):
+        value = str(value).strip() if value is not None else ""
+        if not value:
+            return None
+        key = value.lower()
+        if key not in self._cache:
+            obj = Branch.objects.filter(name__iexact=value).first()
+            if obj is None:
+                obj = Branch.objects.filter(code__iexact=value).first()
+            # Fallback: try numeric PK
+            if obj is None and value.isdigit():
+                obj = Branch.objects.filter(pk=int(value)).first()
+            self._cache[key] = obj
+        return self._cache[key]
+
+
 class ProductImportResource(resources.ModelResource):
-    ## foreignkey fields handeling
+    ## foreignkey fields handling
     generic_name = fields.Field(
         attribute="generic_name",
         column_name="generic_name",
         widget=GenericNameByNameOrCreateWidget(GenericName, "name"),
     )
+    companyId = fields.Field(
+        attribute="companyId",
+        column_name="companyId",
+        widget=CompanyByNameWidget(),
+    )
+    branch = fields.Field(
+        attribute="branch",
+        column_name="branch",
+        widget=BranchByNameOrCodeWidget(),
+    )
     HEADER_ALIASES = {
         "brand name": "brand_name",
         "dosage form": "dosage_form",
         "generic": "generic_name",
+        "company": "companyId",
+        "company name": "companyId",
+        "company id": "companyId",
+        "companyid": "companyId",
+        "branch": "branch",
+        "branch name": "branch",
+        "branch code": "branch",
+        "branchid": "branch",
+        "branch id": "branch",
         "weight": "weight",
         "manufacturer": "manufacturer",
         "unit price": "price",
@@ -146,6 +210,8 @@ class ProductImportResource(resources.ModelResource):
             "recently_viewed",
             "recently_updated",
             "generic_name",
+            "companyId",
+            "branch",
         )
         import_id_fields = []
         use_bulk = True
@@ -224,9 +290,12 @@ class ProductImportResource(resources.ModelResource):
             raise exceptions.ImportError("Skipping empty row")
 
     def import_row(self, row, instance_loader, **kwargs):
-        # Only import fields that exist on the model
+        # Only import fields that exist on the model or are declared on this resource
         model_fields = {f.name for f in self._meta.model._meta.get_fields()}
-        cleaned_row = {k: v for k, v in row.items() if k in model_fields}
+        # Include column_names declared as resource fields (e.g. companyId, branch, generic_name)
+        resource_columns = {f.column_name for f in self.fields.values()}
+        allowed_keys = model_fields | resource_columns
+        cleaned_row = {k: v for k, v in row.items() if k in allowed_keys}
         return super().import_row(cleaned_row, instance_loader, **kwargs)
 
 

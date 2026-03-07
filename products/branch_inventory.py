@@ -182,7 +182,7 @@ def update_branch_fields(product, branch, *, fields: dict, updated_by=None):
             update_fields.append("available")
         if update_fields:
             # Some code expects these derived fields to be updated.
-            update_fields += ["updateAt", "status", "inventoryType", "out_of_stock"]
+            update_fields += ["in_stock_secondary", "updateAt", "status", "inventoryType", "out_of_stock"]
             try:
                 product.save(update_fields=list(dict.fromkeys(update_fields)))
             except Exception:
@@ -206,6 +206,7 @@ def adjust_branch_stock(
             product.save(
                 update_fields=[
                     "in_stock",
+                    "in_stock_secondary",
                     "available",
                     "updateAt",
                     "status",
@@ -231,6 +232,7 @@ def adjust_branch_stock(
             product.save(
                 update_fields=[
                     "in_stock",
+                    "in_stock_secondary",
                     "available",
                     "updateAt",
                     "status",

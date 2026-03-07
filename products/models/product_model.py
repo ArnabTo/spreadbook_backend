@@ -159,6 +159,36 @@ class Product(Timestamp):
     # Enable per-batch tracking for pharmacy/perishable items (see ProductBatch)
     track_batches = models.BooleanField(default=False)
 
+    # ── Dual-unit / pack-size fields ──────────────────────────────────────────
+    # Primary unit  (e.g. Box, Strip, Bottle) is the existing `unit` FK.
+    # Optional secondary unit (e.g. Piece, Tablet, ml) can be linked here.
+    # The conversion ratio is per-product so 1 Paracetamol Box = 10 Strips
+    # while 1 Amoxicillin Box = 6 Strips.
+    secondary_unit = models.ForeignKey(
+        Unit,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="secondary_products",
+        help_text=(
+            "The smaller / secondary unit (e.g. Piece, Tablet, ml). "
+            "When set, stock is also shown in this unit."
+        ),
+    )
+    unit_conversion_factor = models.PositiveIntegerField(
+        default=1,
+        help_text=(
+            "How many secondary units equal 1 primary unit. "
+            "E.g. 1 Box = 10 Pieces → enter 10. "
+            "Ignored when secondary_unit is not set."
+        ),
+    )
+    # Auto-computed field; never set this directly – it is recalculated in save().
+    in_stock_secondary = models.IntegerField(
+        default=0,
+        help_text="Read-only. Auto-computed as in_stock × unit_conversion_factor.",
+    )
+
     gender = models.CharField(
         max_length=100, choices=GENDER_CHOICE, default="All", blank=True, null=True
     )
@@ -393,8 +423,17 @@ class Product(Timestamp):
         # - `priceSale` is an optional discounted/sale price.
         # Historically this project overwrote `price` with `priceSale`, which
         # caused `price` to become 0 when only `price` was provided and `priceSale` stayed at default 0.
-        
+
         self.priceSale = self.price
+
+        # Dual-unit: keep secondary stock in sync whenever in_stock changes.
+        secondary_id = getattr(self, "secondary_unit_id", None)
+        if secondary_id and self.unit_conversion_factor:
+            self.in_stock_secondary = (self.in_stock or 0) * int(
+                self.unit_conversion_factor
+            )
+        else:
+            self.in_stock_secondary = 0
 
         super(Product, self).save(*args, **kwargs)
 

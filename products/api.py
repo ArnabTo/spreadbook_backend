@@ -86,8 +86,7 @@ class ProductOptionsView(APIView):
         ).order_by("name")
 
         # Existing models (not company-scoped in current schema)
-        categories_qs = Category.objects.filter(
-            is_active=True).order_by("name")
+        categories_qs = Category.objects.filter(is_active=True).order_by("name")
         units_qs = Unit.objects.filter(status=True).order_by("name")
 
         return Response(
@@ -99,6 +98,33 @@ class ProductOptionsView(APIView):
                 "generic_names": GenericNameSerializer(generics_qs, many=True).data,
             }
         )
+
+
+class UnitViewSet(viewsets.ModelViewSet):
+    """CRUD for Unit.  Used by the frontend Add-Product form to create missing units."""
+
+    serializer_class = UnitSerializer
+    http_method_names = ["get", "post", "patch", "put", "delete", "head", "options"]
+
+    def get_queryset(self):
+        return Unit.objects.all().order_by("name")
+
+    def create(self, request, *args, **kwargs):
+        # Normalise name: strip whitespace, reject blank.
+        name = (request.data.get("name") or "").strip()
+        if not name:
+            return Response(
+                {"name": ["Unit name is required."]}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Return existing unit if name already taken (case-insensitive), so the
+        # frontend can simply auto-select it without special-casing duplicates.
+        existing = Unit.objects.filter(name__iexact=name).first()
+        if existing:
+            return Response(UnitSerializer(existing).data, status=status.HTTP_200_OK)
+
+        unit = Unit.objects.create(name=name, status=True)
+        return Response(UnitSerializer(unit).data, status=status.HTTP_201_CREATED)
 
 
 class CategoryViewSet(viewsets.ModelViewSet):
@@ -255,8 +281,7 @@ class ProductBatchViewSet(viewsets.ModelViewSet):
     ordering = ["exp_date", "-receivedAt"]
 
     def get_queryset(self):
-        qs = ProductBatch.objects.select_related(
-            "product", "branch", "supplier").all()
+        qs = ProductBatch.objects.select_related("product", "branch", "supplier").all()
         return apply_company_branch_scope(
             request=self.request,
             queryset=qs,
@@ -272,6 +297,7 @@ class ProductViewSet(viewsets.ModelViewSet):
     Supports anonymous access for product listing with optional filtering,
     and authenticated access with role-based permissions.
     """
+
     serializer_class = ProductSerializer
     pagination_class = ProductPagination
     filter_backends = [
@@ -310,22 +336,8 @@ class ProductViewSet(viewsets.ModelViewSet):
         return [permissions.IsAuthenticated()]
 
     def get_queryset(self):
-        """Build optimized queryset with company/branch scoping and filtering."""
-        qs = self._build_base_queryset()
-        qs = self._apply_branch_inventory_prefetch(qs)
-
-        if self._is_anonymous_request():
-            qs = self._apply_anonymous_filters(qs)
-        else:
-            qs = self._apply_authenticated_scoping(qs)
-            qs = self._apply_query_param_overrides(qs)
-
-        return qs
-
-    def _build_base_queryset(self):
-        """Build the base optimized queryset for products."""
-        return (
-            Product.objects.select_related("unit", "supplier")
+        qs = (
+            Product.objects.select_related("unit", "supplier", "generic_name", "brand")
             .only(
                 "id",
                 "name",
@@ -347,13 +359,23 @@ class ProductViewSet(viewsets.ModelViewSet):
                 "companyId_id",
                 "branch_id",
                 "unit_id",
+                "unit__name",
                 "supplier_id",
+                "supplier__name",
+                "generic_name_id",
+                "generic_name__name",
+                "brand_id",
+                "brand__name",
+                "description",
+                "subDescription",
+                "exp_date",
+                "inventoryType",
+                "supplier_price",
+                "low_stock_threshold",
             )
             .all()
         )
 
-    def _apply_branch_inventory_prefetch(self, qs):
-        """Prefetch branch-specific inventory data if branch_id is specified."""
         branch_id = self.request.query_params.get(
             "branch_id"
         ) or self.request.query_params.get("branchId")
@@ -378,86 +400,37 @@ class ProductViewSet(viewsets.ModelViewSet):
                     )
                 )
             except Exception:
-                # If migrations haven't been applied yet, don't break product listing.
                 pass
-        return qs
 
-    def _is_anonymous_request(self):
-        """Check if the request is from an anonymous user."""
-        return (
+        if (
             not getattr(self.request, "user", None)
             or not self.request.user.is_authenticated
-        )
+        ):
+            if branch_id:
+                qs = qs.filter(branch_id=branch_id)
+            return qs
 
-    def _apply_anonymous_filters(self, qs):
-        """Apply filtering for anonymous users."""
-        # OPEN ACCESS MODE (temporary): return all products for anonymous users.
-        # NOTE: this will expose cross-company products if you run multi-tenant.
-
-        # Allow filtering by companyId and branch_id if provided
-        requested_company_id = self.request.query_params.get(
-            "company_id"
-        ) or self.request.query_params.get("companyId")
-        if requested_company_id:
-            qs = qs.filter(companyId_id=requested_company_id)
-
-        requested_branch_id = self.request.query_params.get(
-            "branch_id"
-        ) or self.request.query_params.get("branchId")
-        if requested_branch_id:
-            qs = qs.filter(branch_id=requested_branch_id)
-
-        return qs
-
-    ## Authenticated scoping ---- Not Working ----- fix needed
-    def _apply_authenticated_scoping(self, qs):
-        """Apply company/branch scoping for authenticated users."""
-        return apply_company_branch_scope(
+        qs = apply_company_branch_scope(
             request=self.request,
             queryset=qs,
             company_id_field="companyId_id",
             branch_id_field="branch_id",
         )
 
-    def _apply_query_param_overrides(self, qs):
-        """Apply explicit company/branch overrides from query parameters."""
-        # Optional explicit company scoping (for users who can switch company in UI).
         requested_company_id = self.request.query_params.get(
             "company_id"
         ) or self.request.query_params.get("companyId")
-
-        if requested_company_id:
-            # For unrestricted users, allow filtering by any company
-            # For restricted users, validate access
-            if not is_unrestricted_user(self.request.user):
-                allowed_company_ids = get_company_ids_for_user(
-                    self.request.user)
-                if (
-                    not allowed_company_ids
-                    or str(requested_company_id) not in allowed_company_ids
-                ):
-                    raise PermissionDenied(
-                        "You do not have access to this company")
+        if requested_company_id and not is_unrestricted_user(self.request.user):
+            allowed_company_ids = get_company_ids_for_user(self.request.user)
+            if (
+                not allowed_company_ids
+                or str(requested_company_id) not in allowed_company_ids
+            ):
+                raise PermissionDenied("You do not have access to this company")
             qs = qs.filter(companyId_id=requested_company_id)
 
-        # Optional explicit branch scoping (for users who can switch branch in UI).
-        requested_branch_id = self.request.query_params.get(
-            "branch_id"
-        ) or self.request.query_params.get("branchId")
-
-        if requested_branch_id:
-            # For unrestricted users, allow filtering by any branch
-            # For restricted users, validate access
-            if not is_unrestricted_user(self.request.user):
-                allowed_branch_ids = get_allowed_branch_ids_for_user(
-                    self.request.user)
-                if (
-                    allowed_branch_ids is not None
-                    and str(requested_branch_id) not in allowed_branch_ids
-                ):
-                    raise PermissionDenied(
-                        "You do not have access to this branch")
-            qs = qs.filter(branch_id=requested_branch_id)
+        if branch_id:
+            qs = qs.filter(branch_id=branch_id)
 
         return qs
 
@@ -495,8 +468,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                     user.branchAccess.values_list("company_id", flat=True)
                 )
                 if len(company_ids) == 1:
-                    saved = serializer.save(
-                        companyId_id=next(iter(company_ids)))
+                    saved = serializer.save(companyId_id=next(iter(company_ids)))
                 else:
                     saved = serializer.save(companyId=company)
             else:
@@ -528,17 +500,6 @@ class ProductViewSet(viewsets.ModelViewSet):
     # === Custom Update Methods ===
 
     def update(self, request, *args, **kwargs):
-        """Handle full updates with branch-specific field handling."""
-        return self._handle_branch_specific_update(request, *args, **kwargs)
-
-    def partial_update(self, request, *args, **kwargs):
-        """Handle partial updates with branch-specific field handling."""
-        return self._handle_branch_specific_update(request, partial=True, *args, **kwargs)
-
-    def _handle_branch_specific_update(self, request, partial=False, *args, **kwargs):
-        """Handle updates that may affect branch-specific fields."""
-        # Enforce branch-only edits: when `branch_id` is present, only price + stock are writable
-        # and they are stored in ProductBranchInventory (not on Product).
         branch_id = request.query_params.get("branch_id") or request.query_params.get(
             "branchId"
         )
@@ -550,21 +511,129 @@ class ProductViewSet(viewsets.ModelViewSet):
                     {"detail": "Invalid branch_id"}, status=status.HTTP_400_BAD_REQUEST
                 )
 
-            allowed = {"price", "priceSale",
-                       "regular_price", "in_stock", "available"}
-            fields = {k: request.data.get(k)
-                      for k in allowed if k in request.data}
-            update_branch_fields(
-                product, branch, fields=fields, updated_by=request.user
-            )
+            branch_fields = {
+                "in_stock",
+                "available",
+                "price",
+                "priceSale",
+                "regular_price",
+            }
+            branch_data = {
+                k: request.data.get(k) for k in branch_fields if k in request.data
+            }
+
+            catalog_allowed = {
+                "name",
+                "sku",
+                "brand_name",
+                "manufacturer",
+                "code",
+                "category",
+                "description",
+                "model",
+                "coverUrl",
+                "image",
+                "subDescription",
+                "unit",
+                "price",
+                "priceSale",
+                "regular_price",
+                "supplier_price",
+                "generic_name",
+                "exp_date",
+                "mfg_date",
+                "inventoryType",
+                "quantity",
+                "low_stock_threshold",
+            }
+            catalog_data = {
+                k: v for k, v in request.data.items() if k in catalog_allowed
+            }
+
+            if catalog_data:
+                serializer = self.get_serializer(
+                    product, data=catalog_data, partial=True
+                )
+                serializer.is_valid(raise_exception=True)
+                product = serializer.save()
+
+            if branch_data:
+                update_branch_fields(
+                    product, branch, fields=branch_data, updated_by=request.user
+                )
 
             ser = self.get_serializer(product)
             return Response(ser.data)
 
-        # Standard update for non-branch-specific changes
-        if partial:
-            return super().partial_update(request, *args, **kwargs)
         return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        branch_id = request.query_params.get("branch_id") or request.query_params.get(
+            "branchId"
+        )
+        if branch_id:
+            product = self.get_object()
+            branch = resolve_branch_from_request(request, product=product)
+            if not branch:
+                return Response(
+                    {"detail": "Invalid branch_id"}, status=status.HTTP_400_BAD_REQUEST
+                )
+
+            branch_fields = {
+                "in_stock",
+                "available",
+                "price",
+                "priceSale",
+                "regular_price",
+            }
+            branch_data = {
+                k: request.data.get(k) for k in branch_fields if k in request.data
+            }
+
+            catalog_allowed = {
+                "name",
+                "sku",
+                "brand_name",
+                "manufacturer",
+                "code",
+                "category",
+                "description",
+                "model",
+                "coverUrl",
+                "image",
+                "subDescription",
+                "unit",
+                "price",
+                "priceSale",
+                "regular_price",
+                "supplier_price",
+                "generic_name",
+                "exp_date",
+                "mfg_date",
+                "inventoryType",
+                "quantity",
+                "low_stock_threshold",
+            }
+            catalog_data = {
+                k: v for k, v in request.data.items() if k in catalog_allowed
+            }
+
+            if catalog_data:
+                serializer = self.get_serializer(
+                    product, data=catalog_data, partial=True
+                )
+                serializer.is_valid(raise_exception=True)
+                product = serializer.save()
+
+            if branch_data:
+                update_branch_fields(
+                    product, branch, fields=branch_data, updated_by=request.user
+                )
+
+            ser = self.get_serializer(product)
+            return Response(ser.data)
+
+        return super().partial_update(request, *args, **kwargs)
 
     # === Stock Management Actions ===
 
@@ -589,8 +658,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                 product,
                 branch,
                 delta=qty_int,
-                reason=serializer.validated_data.get(
-                    "reason", "Stock addition"),
+                reason=serializer.validated_data.get("reason", "Stock addition"),
                 notes=serializer.validated_data.get("notes", ""),
                 updated_by=request.user,
             )
@@ -601,7 +669,13 @@ class ProductViewSet(viewsets.ModelViewSet):
             product.quantity = new
             product.available = new
             product.save(
-                update_fields=["in_stock", "quantity", "available", "updateAt"]
+                update_fields=[
+                    "in_stock",
+                    "in_stock_secondary",
+                    "quantity",
+                    "available",
+                    "updateAt",
+                ]
             )
             ProductStockMovement.objects.create(
                 product=product,
@@ -609,11 +683,9 @@ class ProductViewSet(viewsets.ModelViewSet):
                 quantity=qty,
                 previous_stock=Decimal(prev),
                 new_stock=Decimal(new),
-                reason=serializer.validated_data.get(
-                    "reason", "Stock addition"),
+                reason=serializer.validated_data.get("reason", "Stock addition"),
                 notes=serializer.validated_data.get("notes", ""),
-                reference_number=serializer.validated_data.get(
-                    "reference_number", ""),
+                reference_number=serializer.validated_data.get("reference_number", ""),
                 created_by=(
                     request.user.username
                     if request.user and request.user.is_authenticated
@@ -649,8 +721,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                 product,
                 branch,
                 delta=-actual,
-                reason=serializer.validated_data.get(
-                    "reason", "Stock reduction"),
+                reason=serializer.validated_data.get("reason", "Stock reduction"),
                 notes=serializer.validated_data.get("notes", ""),
                 updated_by=request.user,
             )
@@ -662,7 +733,13 @@ class ProductViewSet(viewsets.ModelViewSet):
             product.quantity = new
             product.available = new
             product.save(
-                update_fields=["in_stock", "quantity", "available", "updateAt"]
+                update_fields=[
+                    "in_stock",
+                    "in_stock_secondary",
+                    "quantity",
+                    "available",
+                    "updateAt",
+                ]
             )
             ProductStockMovement.objects.create(
                 product=product,
@@ -670,11 +747,9 @@ class ProductViewSet(viewsets.ModelViewSet):
                 quantity=Decimal(actual),
                 previous_stock=Decimal(prev),
                 new_stock=Decimal(new),
-                reason=serializer.validated_data.get(
-                    "reason", "Stock reduction"),
+                reason=serializer.validated_data.get("reason", "Stock reduction"),
                 notes=serializer.validated_data.get("notes", ""),
-                reference_number=serializer.validated_data.get(
-                    "reference_number", ""),
+                reference_number=serializer.validated_data.get("reference_number", ""),
                 created_by=(
                     request.user.username
                     if request.user and request.user.is_authenticated
@@ -710,8 +785,7 @@ class ProductPostSet(viewsets.ModelViewSet):
             return company
 
         if hasattr(user, "branchAccess"):
-            company_ids = set(user.branchAccess.values_list(
-                "company_id", flat=True))
+            company_ids = set(user.branchAccess.values_list("company_id", flat=True))
             if len(company_ids) == 1:
                 from company.models import Company
 
@@ -771,8 +845,7 @@ class ProductPostSet(viewsets.ModelViewSet):
                 )
                 return
             raise PermissionDenied("User is not associated with a company")
-        serializer.save(companyId=company,
-                        branch=self._resolve_branch_for_user())
+        serializer.save(companyId=company, branch=self._resolve_branch_for_user())
 
     def perform_update(self, serializer):
         user = getattr(self.request, "user", None)
@@ -822,8 +895,15 @@ class ProductPostSet(viewsets.ModelViewSet):
         product.in_stock = new
         product.quantity = new
         product.available = new
-        product.save(update_fields=["in_stock",
-                     "quantity", "available", "updateAt"])
+        product.save(
+            update_fields=[
+                "in_stock",
+                "in_stock_secondary",
+                "quantity",
+                "available",
+                "updateAt",
+            ]
+        )
 
         ProductStockMovement.objects.create(
             product=product,
@@ -833,8 +913,7 @@ class ProductPostSet(viewsets.ModelViewSet):
             new_stock=Decimal(new),
             reason=serializer.validated_data.get("reason", "Stock addition"),
             notes=serializer.validated_data.get("notes", ""),
-            reference_number=serializer.validated_data.get(
-                "reference_number", ""),
+            reference_number=serializer.validated_data.get("reference_number", ""),
             created_by=(
                 request.user.username
                 if request.user and request.user.is_authenticated
@@ -866,8 +945,15 @@ class ProductPostSet(viewsets.ModelViewSet):
         product.in_stock = new
         product.quantity = new
         product.available = new
-        product.save(update_fields=["in_stock",
-                     "quantity", "available", "updateAt"])
+        product.save(
+            update_fields=[
+                "in_stock",
+                "in_stock_secondary",
+                "quantity",
+                "available",
+                "updateAt",
+            ]
+        )
 
         ProductStockMovement.objects.create(
             product=product,
@@ -877,8 +963,7 @@ class ProductPostSet(viewsets.ModelViewSet):
             new_stock=Decimal(new),
             reason=serializer.validated_data.get("reason", "Stock reduction"),
             notes=serializer.validated_data.get("notes", ""),
-            reference_number=serializer.validated_data.get(
-                "reference_number", ""),
+            reference_number=serializer.validated_data.get("reference_number", ""),
             created_by=(
                 request.user.username
                 if request.user and request.user.is_authenticated
@@ -983,8 +1068,7 @@ class PosProductIndexView(APIView):
                 not allowed_company_ids
                 or str(requested_company_id) not in allowed_company_ids
             ):
-                raise PermissionDenied(
-                    "You do not have access to this company")
+                raise PermissionDenied("You do not have access to this company")
             qs = qs.filter(companyId_id=requested_company_id)
 
         updated_since = request.query_params.get(
