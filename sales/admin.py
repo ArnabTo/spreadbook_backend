@@ -13,7 +13,7 @@ from sales.models import Sale, InvoiceItem
 class SaleAdmin(admin.ModelAdmin):
      list_display = (
           '_invoice_number', 'invoiceFrom', 'invoiceTo',
-          'payment_method', 'status', 'is_paid',
+          'payment_method', 'status', 'is_paid', 'sales_reference',
           'due', 'total'
      )
      actions = ('discount_30',)

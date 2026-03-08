@@ -153,7 +153,8 @@ class SalePostSerializer(serializers.ModelSerializer):
 
         # Feature-flagged enforcement (UI-safe default: off)
         company = validated_data.get("companyId")
-        customization = getattr(company, "customization", None) if company else None
+        customization = getattr(company, "customization",
+                                None) if company else None
         enforce = bool(getattr(customization, "enforce_prescriptions", False))
         enforce_controlled = bool(
             getattr(customization, "enforce_controlled_substances", False)
@@ -184,7 +185,8 @@ class SalePostSerializer(serializers.ModelSerializer):
                 from pharmacy.models import Prescription
 
                 prescription = (
-                    Prescription.objects.filter(id=prescription_id, status="approved")
+                    Prescription.objects.filter(
+                        id=prescription_id, status="approved")
                     .select_related("company", "branch")
                     .first()
                 )
@@ -213,7 +215,8 @@ class SalePostSerializer(serializers.ModelSerializer):
         invoice_int = int(invoiceNumber.split("INV-")[-1])
         width = 4
         new_invoice_int = invoice_int + 1
-        formatted = (width - len(str(new_invoice_int))) * "0" + str(new_invoice_int)
+        formatted = (width - len(str(new_invoice_int))) * \
+            "0" + str(new_invoice_int)
         new_invoice_no = "INV-" + str(formatted)
         # print(new_invoice_no)
         validated_data.pop("invoiceNumber", None)
@@ -253,15 +256,18 @@ class SalePostSerializer(serializers.ModelSerializer):
         instance.discount = validated_data.get("discount", instance.discount)
         instance.subTotal = validated_data.get("subTotal", instance.subTotal)
         instance.totalQty = validated_data.get("totalQty", instance.totalQty)
-        instance.totalAmount = validated_data.get("totalAmount", instance.totalAmount)
+        instance.totalAmount = validated_data.get(
+            "totalAmount", instance.totalAmount)
         instance.advance = validated_data.get("advance", instance.advance)
         instance.pdf_file = validated_data.get("pdf_file", instance.pdf_file)
         instance.due = validated_data.get("due", instance.due)
         instance.shipping = validated_data.get("shipping", instance.shipping)
         instance.total = validated_data.get("total", instance.total)
         instance.user = validated_data.get("user", instance.user)
-        instance.invoiceTo = validated_data.get("invoiceTo", instance.invoiceTo)
-        instance.invoiceFrom = validated_data.get("invoiceFrom", instance.invoiceFrom)
+        instance.invoiceTo = validated_data.get(
+            "invoiceTo", instance.invoiceTo)
+        instance.invoiceFrom = validated_data.get(
+            "invoiceFrom", instance.invoiceFrom)
         instance.dueDate = validated_data.get("dueDate", instance.dueDate)
 
         instance.save()
@@ -360,10 +366,12 @@ class POSOrderItemSerializer(serializers.ModelSerializer):
     def validate(self, data):
         """Validate order item data"""
         if data.get("quantity", 0) <= 0:
-            raise serializers.ValidationError("Quantity must be greater than 0")
+            raise serializers.ValidationError(
+                "Quantity must be greater than 0")
 
         if data.get("price", 0) <= 0:  # Use 'price' field name
-            raise serializers.ValidationError("Unit price must be greater than 0")
+            raise serializers.ValidationError(
+                "Unit price must be greater than 0")
 
         return data
 
@@ -372,7 +380,8 @@ class POSOrderSerializer(serializers.ModelSerializer):
     """Serializer for POS orders"""
 
     items = POSOrderItemSerializer(many=True, write_only=True)
-    order_items = POSOrderItemSerializer(many=True, read_only=True, source="items")
+    order_items = POSOrderItemSerializer(
+        many=True, read_only=True, source="items")
 
     # Add properties for new field names
     subtotal = serializers.FloatField(source="subTotal", read_only=True)
@@ -387,6 +396,7 @@ class POSOrderSerializer(serializers.ModelSerializer):
 
     served_by = serializers.SerializerMethodField()
     served_by_name = serializers.SerializerMethodField()
+    sales_reference_name = serializers.SerializerMethodField()
 
     company_name = serializers.SerializerMethodField()
     branch_name = serializers.SerializerMethodField()
@@ -406,6 +416,7 @@ class POSOrderSerializer(serializers.ModelSerializer):
             "notes",
             "served_by",
             "served_by_name",
+            "sales_reference_name",
             "company_name",
             "branch_name",
             "store",
@@ -455,7 +466,8 @@ class POSOrderSerializer(serializers.ModelSerializer):
         # Create order items
         for item_data in items_data:
             # Calculate item total using legacy field names
-            item_total = Decimal(str(item_data["price"])) * item_data["quantity"]
+            item_total = Decimal(
+                str(item_data["price"])) * item_data["quantity"]
             item_data["total"] = item_total
 
             # Create the item
@@ -463,20 +475,23 @@ class POSOrderSerializer(serializers.ModelSerializer):
 
             # Update totals
             subtotal += item_total
-            total_prep_time = max(total_prep_time, item_data.get("preparation_time", 0))
+            total_prep_time = max(
+                total_prep_time, item_data.get("preparation_time", 0))
 
         # Update order totals using legacy field names
         order.subTotal = float(subtotal)
 
         # Discount amount may be stored explicitly; fall back to percent rate.
         if not order.discount_amount and order.discount:
-            order.discount_amount = float(subtotal * Decimal(str(order.discount)) / 100)
+            order.discount_amount = float(
+                subtotal * Decimal(str(order.discount)) / 100)
 
         base_amount = subtotal - Decimal(str(order.discount_amount or 0))
         if base_amount < 0:
             base_amount = Decimal("0.00")
 
-        order.taxes_value = float(base_amount * Decimal(str(order.taxes or 0)) / 100)
+        order.taxes_value = float(
+            base_amount * Decimal(str(order.taxes or 0)) / 100)
         order.service_charge_amount = float(
             base_amount * Decimal(str(order.service_charge_rate or 0)) / 100
         )
@@ -560,7 +575,8 @@ class POSOrderSerializer(serializers.ModelSerializer):
         """Return store details used in receipt header (nullable fields allowed)."""
 
         branch = getattr(obj, "branch", None)
-        company = getattr(obj, "companyId", None) or getattr(branch, "company", None)
+        company = getattr(obj, "companyId", None) or getattr(
+            branch, "company", None)
 
         if not branch and not company:
             return None
@@ -622,6 +638,16 @@ class POSOrderSerializer(serializers.ModelSerializer):
             or getattr(u, "username", None)
         )
 
+    def get_sales_reference_name(self, obj):
+        u = getattr(obj, "sales_reference", None)
+        if not u:
+            return None
+        return (
+            getattr(u, "fullName", None)
+            or getattr(u, "name", None)
+            or getattr(u, "username", None)
+        )
+
 
 # Mapping of frontend order types to backend order types
 ORDER_TYPE_MAPPING = {
@@ -653,27 +679,36 @@ class POSOrderCreateSerializer(serializers.Serializer):
     special_instructions = serializers.CharField(
         required=False, allow_blank=True
     )  # Order-level notes
-    tax_rate = serializers.DecimalField(max_digits=5, decimal_places=2, default=10.0)
+    tax_rate = serializers.DecimalField(
+        max_digits=5, decimal_places=2, default=10.0)
 
     # Optional cashier attribution (employee switch)
     served_by_id = serializers.CharField(
         required=False, allow_blank=True, allow_null=True
     )
 
+    # Optional sales reference: staff by whose reference this sale was made
+    sales_reference_id = serializers.CharField(
+        required=False, allow_blank=True, allow_null=True
+    )
+
     # Allow creating orders even if inventory is insufficient.
     # This is intended for inventory mismatch / new items scenarios.
     # Backend still enforces that only privileged roles can enable this.
-    allow_out_of_stock = serializers.BooleanField(required=False, default=False)
+    allow_out_of_stock = serializers.BooleanField(
+        required=False, default=False)
 
     # Allow POS to provide a manual unit price for Product lines when the server-side
     # Product has no usable price (0 / missing). This is primarily for correcting
     # catalog issues at checkout time.
-    allow_price_override = serializers.BooleanField(required=False, default=False)
+    allow_price_override = serializers.BooleanField(
+        required=False, default=False)
 
     # Allow cash payments to be partial (remaining amount becomes due).
     # When enabled, backend will not reject cash_received < total and will store
     # the paid portion in `advance` and the remainder in `due`.
-    allow_partial_cash = serializers.BooleanField(required=False, default=False)
+    allow_partial_cash = serializers.BooleanField(
+        required=False, default=False)
 
     def validate_order_type(self, value):
         """Normalize order_type from frontend format to backend format"""
@@ -721,7 +756,8 @@ class POSOrderCreateSerializer(serializers.Serializer):
     discount_value = serializers.DecimalField(
         max_digits=10, decimal_places=2, default=0, required=False
     )
-    promo_code = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    promo_code = serializers.CharField(
+        max_length=50, required=False, allow_blank=True)
 
     # Tip / service charge
     tip_amount = serializers.DecimalField(
@@ -751,7 +787,8 @@ class POSOrderCreateSerializer(serializers.Serializer):
 
             # At least one of name/title must be present (or resolvable later from DB).
             # We keep this permissive, but avoid creating DB rows with NULL title.
-            name_or_title = (item.get("name") or item.get("title") or "").strip()
+            name_or_title = (
+                item.get("name") or item.get("title") or "").strip()
             if not name_or_title:
                 # Don't hard-fail here if the item can be resolved from DB by id/code.
                 # Validation happens again during create when MenuItem/Product lookup is available.
@@ -765,7 +802,8 @@ class POSOrderCreateSerializer(serializers.Serializer):
             # Legacy restaurant payloads always send a price; MegaShop product lines can
             # be priced server-side (but we still accept client price for compatibility).
             if "price" in item and item["price"] <= 0:
-                raise serializers.ValidationError("Item price must be greater than 0")
+                raise serializers.ValidationError(
+                    "Item price must be greater than 0")
 
         return items
 
@@ -778,7 +816,8 @@ class POSOrderCreateSerializer(serializers.Serializer):
 
         # Normalize waiver
         if cash_waiver is not None and cash_waiver < 0:
-            raise serializers.ValidationError({"cash_waiver": "Must be 0 or greater"})
+            raise serializers.ValidationError(
+                {"cash_waiver": "Must be 0 or greater"})
 
         # Only meaningful for cash payments.
         if payment_method != "cash":
@@ -799,7 +838,8 @@ class POSOrderCreateSerializer(serializers.Serializer):
 
         if cash_waiver is not None and cash_waiver > max_waiver:
             raise serializers.ValidationError(
-                {"cash_waiver": f"Must be \u2264 {max_waiver} (POS_CASH_WAIVER_MAX)"}
+                {"cash_waiver":
+                    f"Must be \u2264 {max_waiver} (POS_CASH_WAIVER_MAX)"}
             )
 
         # If cash_received is provided, waiver cannot exceed the short amount.
@@ -869,13 +909,17 @@ class POSOrderCreateSerializer(serializers.Serializer):
             validated_data.pop("allow_out_of_stock", False)
         )
 
-        allow_price_override = bool(validated_data.pop("allow_price_override", False))
+        allow_price_override = bool(
+            validated_data.pop("allow_price_override", False))
 
-        allow_partial_cash = bool(validated_data.pop("allow_partial_cash", False))
+        allow_partial_cash = bool(
+            validated_data.pop("allow_partial_cash", False))
 
         prescription_id = validated_data.pop("prescription_id", None)
 
         served_by_id = validated_data.pop("served_by_id", None)
+
+        sales_reference_id = validated_data.pop("sales_reference_id", None)
 
         is_paid = bool(validated_data.pop("is_paid", False))
 
@@ -883,7 +927,8 @@ class POSOrderCreateSerializer(serializers.Serializer):
         branch = validated_data.pop("branch", None)
 
         # Feature-flagged enforcement (UI-safe default: off)
-        customization = getattr(company, "customization", None) if company else None
+        customization = getattr(company, "customization",
+                                None) if company else None
         enforce = bool(getattr(customization, "enforce_prescriptions", False))
         enforce_controlled = bool(
             getattr(customization, "enforce_controlled_substances", False)
@@ -931,7 +976,8 @@ class POSOrderCreateSerializer(serializers.Serializer):
                     for p in products
                     if getattr(p, "prescription_required", False)
                     or (
-                        enforce_controlled and getattr(p, "controlled_substance", False)
+                        enforce_controlled and getattr(
+                            p, "controlled_substance", False)
                     )
                 ]
 
@@ -980,7 +1026,8 @@ class POSOrderCreateSerializer(serializers.Serializer):
 
             served_by_user = User.objects.filter(id=served_by_id).first()
             if not served_by_user:
-                raise serializers.ValidationError({"served_by_id": "Invalid employee"})
+                raise serializers.ValidationError(
+                    {"served_by_id": "Invalid employee"})
 
             # Company scope check
             if company is not None:
@@ -993,7 +1040,8 @@ class POSOrderCreateSerializer(serializers.Serializer):
 
             # Branch scope check (when branch is fixed)
             if branch is not None and not is_unrestricted_user(served_by_user):
-                allowed_branch_ids = get_allowed_branch_ids_for_user(served_by_user)
+                allowed_branch_ids = get_allowed_branch_ids_for_user(
+                    served_by_user)
                 if (
                     allowed_branch_ids is not None
                     and str(branch.id) not in allowed_branch_ids
@@ -1066,7 +1114,8 @@ class POSOrderCreateSerializer(serializers.Serializer):
                         )
 
             # Get special instructions (order-level notes)
-            special_instructions = validated_data.get("special_instructions", "")
+            special_instructions = validated_data.get(
+                "special_instructions", "")
             order_notes = validated_data.get("notes", "")
 
             # Combine notes if both exist
@@ -1083,7 +1132,8 @@ class POSOrderCreateSerializer(serializers.Serializer):
             change_amount = validated_data.get("change_amount")
             cash_waiver = validated_data.get("cash_waiver")
 
-            payment_method = (validated_data.get("payment_method") or "cash").lower()
+            payment_method = (validated_data.get(
+                "payment_method") or "cash").lower()
 
             # Add cash payment info to notes if applicable
             if cash_received is not None and change_amount is not None:
@@ -1107,6 +1157,14 @@ class POSOrderCreateSerializer(serializers.Serializer):
             if effective_cash_amount is not None and cash_waiver is not None:
                 effective_cash_amount = effective_cash_amount + cash_waiver
 
+            # Resolve sales_reference user
+            sales_reference_user = None
+            if sales_reference_id:
+                sales_reference_id = str(sales_reference_id).strip()
+                if sales_reference_id:
+                    sales_reference_user = User.objects.filter(
+                        id=sales_reference_id).first()
+
             # Create order with legacy field names
             order = Sale.objects.create(
                 companyId=company,
@@ -1120,7 +1178,8 @@ class POSOrderCreateSerializer(serializers.Serializer):
                 is_paid=is_paid,
                 currency=validated_data.get("currency", "BDT"),
                 notes=combined_notes,
-                taxes=validated_data.get("tax_rate", 10.0),  # Use legacy field name
+                # Use legacy field name
+                taxes=validated_data.get("tax_rate", 10.0),
                 cashAmount=(
                     float(effective_cash_amount)
                     if effective_cash_amount is not None
@@ -1130,6 +1189,7 @@ class POSOrderCreateSerializer(serializers.Serializer):
                 service_charge_rate=float(service_charge_rate),
                 status="confirmed",
                 served_by=served_by_user,
+                sales_reference=sales_reference_user,
             )
 
             # Generate order number immediately after creation
@@ -1147,7 +1207,8 @@ class POSOrderCreateSerializer(serializers.Serializer):
             for item_data in items_data:
                 raw_item_id = str(item_data.get("id") or "").strip()
                 if not raw_item_id:
-                    raise serializers.ValidationError({"items": "Item id is required"})
+                    raise serializers.ValidationError(
+                        {"items": "Item id is required"})
 
                 stored_item_id = raw_item_id
 
@@ -1180,7 +1241,8 @@ class POSOrderCreateSerializer(serializers.Serializer):
                             prod_qs = prod_qs.filter(companyId=company)
                         if branch is not None:
                             prod_qs = prod_qs.filter(
-                                models.Q(branch=branch) | models.Q(branch__isnull=True)
+                                models.Q(branch=branch) | models.Q(
+                                    branch__isnull=True)
                             )
                         product = prod_qs.first()
 
@@ -1246,7 +1308,8 @@ class POSOrderCreateSerializer(serializers.Serializer):
                     category = getattr(product, "category", None) or category
 
                     # Determine unit mode: secondary (e.g. Strip) vs primary (e.g. Box).
-                    _factor = int(getattr(product, "unit_conversion_factor", 0) or 0)
+                    _factor = int(
+                        getattr(product, "unit_conversion_factor", 0) or 0)
                     _sec_id = getattr(product, "secondary_unit_id", None)
                     _sold_in_sec = (
                         bool(item_data.get("sold_in_secondary_unit"))
@@ -1258,7 +1321,8 @@ class POSOrderCreateSerializer(serializers.Serializer):
                     # Secondary-unit products: validation uses in_stock_secondary (e.g. total Strips).
                     # Primary-only products: use in_stock (Boxes or whole units).
                     if _sold_in_sec:
-                        current_stock = int(getattr(product, "in_stock_secondary", 0) or 0)
+                        current_stock = int(
+                            getattr(product, "in_stock_secondary", 0) or 0)
                     else:
                         current_stock = int(numbers.in_stock or 0)
 
@@ -1349,7 +1413,8 @@ class POSOrderCreateSerializer(serializers.Serializer):
 
             # Calculate and update order totals using legacy field names
             discount_type = validated_data.get("discount_type", "none")
-            discount_value = Decimal(str(validated_data.get("discount_value", 0)))
+            discount_value = Decimal(
+                str(validated_data.get("discount_value", 0)))
             promo_code = validated_data.get("promo_code", "")
 
             # Calculate discount amount
@@ -1409,7 +1474,8 @@ class POSOrderCreateSerializer(serializers.Serializer):
             after_discount = subtotal - discount_amount
 
             # Service charge is computed on the discounted base amount
-            service_charge_amount = after_discount * (service_charge_rate / 100)
+            service_charge_amount = after_discount * \
+                (service_charge_rate / 100)
 
             # Calculate tax on discounted amount
             tax_decimal = Decimal(str(order.taxes)) / 100
@@ -1429,7 +1495,8 @@ class POSOrderCreateSerializer(serializers.Serializer):
                 after_discount + tax_amount + service_charge_amount + tip_amount
             )
             order.total = order.totalAmount
-            order.totalQty = sum(item_data["quantity"] for item_data in items_data)
+            order.totalQty = sum(item_data["quantity"]
+                                 for item_data in items_data)
             order.estimated_preparation_time = total_prep_time
 
             # Add promo code to notes if applicable
@@ -1505,7 +1572,8 @@ class POSOrderCreateSerializer(serializers.Serializer):
                 # Add points info to order notes
                 if points_earned > 0:
                     existing_notes = order.notes or ""
-                    order.notes = f"{existing_notes} | Earned {points_earned} loyalty points (100৳ = 1pt)".strip()
+                    order.notes = f"{existing_notes} | Earned {points_earned} loyalty points (100৳ = 1pt)".strip(
+                    )
                     order.save(update_fields=["notes"])
 
         return order
@@ -1523,7 +1591,8 @@ class RefundCreateSerializer(serializers.Serializer):
     )
     reason = serializers.CharField(required=False, allow_blank=True)
     payment_method = serializers.CharField(required=False, allow_blank=True)
-    restock_to_inventory = serializers.BooleanField(required=False, default=True)
+    restock_to_inventory = serializers.BooleanField(
+        required=False, default=True)
 
 
 class RefundItemSerializer(serializers.ModelSerializer):

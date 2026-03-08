@@ -437,8 +437,16 @@ class CreateCompanyUserViewSet(viewsets.ModelViewSet):
                 user.companyId = request.user.companyId
                 user.save()
 
-            # Add branch access - use the same branch as the creating user
-            if (
+            # Add branch access - use branch_ids from request if explicitly provided,
+            # otherwise fall back to the creating user's branch access
+            branch_ids = request.data.get("branch_ids", None)
+            if branch_ids is not None:
+                # branch_ids was explicitly provided (even if empty list)
+                if branch_ids:
+                    from company.models import Branch
+                    branches_qs = Branch.objects.filter(id__in=branch_ids)
+                    user.branchAccess.set(branches_qs)
+            elif (
                 hasattr(request.user, "branchAccess")
                 and request.user.branchAccess.exists()
             ):

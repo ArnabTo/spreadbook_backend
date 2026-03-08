@@ -115,10 +115,12 @@ class Product(Timestamp):
 
     name = models.CharField(max_length=100, null=True, blank=True)
     # NOTE: code is unique per company (not globally) to support multi-tenant catalogs.
-    code = models.CharField(max_length=20, null=True, blank=True, db_index=True)
+    code = models.CharField(max_length=20, null=True,
+                            blank=True, db_index=True)
     model = models.CharField(max_length=100, null=True, blank=True)
     sku = models.CharField(max_length=100, null=True, blank=True)
-    category = models.CharField(max_length=100, default="", null=True, blank=True)
+    category = models.CharField(
+        max_length=100, default="", null=True, blank=True)
 
     # MegaShop catalog helpers (optional; keeps existing APIs stable)
     category_ref = models.ForeignKey(
@@ -212,7 +214,8 @@ class Product(Timestamp):
     # content = RichTextField(blank=False, null=False)
     available = models.IntegerField(default=0)
 
-    unit = models.ForeignKey(Unit, on_delete=models.CASCADE, blank=True, null=True)
+    unit = models.ForeignKey(
+        Unit, on_delete=models.CASCADE, blank=True, null=True)
     # color = models.CharField(max_length=300, default="", blank=True, null=True)
     price = models.FloatField(default=0, blank=True, null=True)
     priceSale = models.FloatField(default=0, blank=True, null=True)
@@ -233,8 +236,10 @@ class Product(Timestamp):
 
     image = models.ImageField(upload_to=upload_to, blank=True, null=True)
     coverUrl = models.ImageField(upload_to=upload_to, blank=True, null=True)
-    barcode = models.ImageField(upload_to=upload_to_barcode, blank=True, null=True)
-    qrcode = models.ImageField(upload_to=upload_to_qrcode, blank=True, null=True)
+    barcode = models.ImageField(
+        upload_to=upload_to_barcode, blank=True, null=True)
+    qrcode = models.ImageField(
+        upload_to=upload_to_qrcode, blank=True, null=True)
 
     quantity = models.IntegerField(default=0)
     out_of_stock = models.BooleanField(default=False)
@@ -449,9 +454,12 @@ class Product(Timestamp):
 
     class Meta:
         indexes = [
-            models.Index(fields=["companyId", "code"], name="idx_product_company_code"),
-            models.Index(fields=["companyId", "name"], name="idx_product_company_name"),
-            models.Index(fields=["companyId", "sku"], name="idx_product_company_sku"),
+            models.Index(fields=["companyId", "code"],
+                         name="idx_product_company_code"),
+            models.Index(fields=["companyId", "name"],
+                         name="idx_product_company_name"),
+            models.Index(fields=["companyId", "sku"],
+                         name="idx_product_company_sku"),
         ]
         constraints = [
             models.UniqueConstraint(
@@ -484,7 +492,8 @@ class Image(models.Model):
     product = models.ForeignKey(
         Product, related_name="images", on_delete=models.CASCADE, null=True
     )
-    picture = models.ImageField(upload_to=upload_to_multi, null=True, blank=True)
+    picture = models.ImageField(
+        upload_to=upload_to_multi, null=True, blank=True)
 
 
 class Tag(models.Model):
@@ -507,3 +516,85 @@ class Color(models.Model):
 
     def __str__(self):
         return f"{self.label}"
+
+
+class ProductVariant(models.Model):
+    """Product variant model for storing product variations like size, color combinations."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name="variants",
+        help_text="Parent product this variant belongs to"
+    )
+
+    # Variant attributes
+    size = models.CharField(
+        max_length=100,
+        null=True,
+        blank=True,
+        help_text="Size of the variant (e.g., S, M, L, XL, 32, 34)"
+    )
+    size_name = models.CharField(
+        max_length=100,
+        null=True,
+        blank=True,
+        help_text="Display name for the size (e.g., Small, Medium, Large)"
+    )
+    size_code = models.CharField(
+        max_length=50,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Unique code for this variant (defaults to product code if not provided)"
+    )
+    size_qty = models.IntegerField(
+        default=0,
+        help_text="Available quantity for this specific variant"
+    )
+    color = models.CharField(
+        max_length=100,
+        null=True,
+        blank=True,
+        help_text="Color of this variant (e.g., Red, Blue, #FF5733)"
+    )
+    price = models.FloatField(
+        default=0,
+        blank=True,
+        null=True,
+        help_text="Price override for this variant (optional, uses product price if not set)"
+    )
+
+    # Optional image for variant
+    image = models.ImageField(
+        upload_to=upload_to,
+        blank=True,
+        null=True,
+        help_text="Optional image specific to this variant"
+    )
+
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['size', 'color']
+        indexes = [
+            models.Index(fields=['product', 'size', 'color'],
+                         name='idx_variant_product_size_color'),
+        ]
+
+    def save(self, *args, **kwargs):
+        """Auto-set size_code to product code if not provided"""
+        if not self.size_code and self.product:
+            self.size_code = self.product.code
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        parts = [str(self.product.name) if self.product else 'Unknown Product']
+        if self.size:
+            parts.append(f"Size: {self.size}")
+        if self.color:
+            parts.append(f"Color: {self.color}")
+        return " - ".join(parts)

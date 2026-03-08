@@ -8,7 +8,7 @@ from django.utils.html import format_html
 from company.models import Company, Branch
 from .models import Category, Product, Unit
 from .models import ProductType, GenericName, Brand, ProductBarcode, ProductBatch
-from .models.product_model import NewLabel, SaleLabel, Size, Image, Tag, Color
+from .models.product_model import NewLabel, SaleLabel, Size, Image, Tag, Color, ProductVariant
 from .models.rating_model import Rating
 from .models.review_model import Review
 from .models.inventory_model import (
@@ -33,7 +33,8 @@ class GenericNameByNameOrCreateWidget(ForeignKeyWidget):
             return self.cache[value]
 
         existing = (
-            GenericName.objects.filter(name__iexact=value).order_by("createdAt").first()
+            GenericName.objects.filter(
+                name__iexact=value).order_by("createdAt").first()
         )
         if existing:
             self.cache[value] = existing
@@ -89,7 +90,7 @@ class BranchByNameOrCodeWidget(ForeignKeyWidget):
 
 
 class ProductImportResource(resources.ModelResource):
-    ## foreignkey fields handling
+    # foreignkey fields handling
     generic_name = fields.Field(
         attribute="generic_name",
         column_name="generic_name",
@@ -250,7 +251,8 @@ class ProductImportResource(resources.ModelResource):
             pass
 
         if generic_index is not None:
-            existing_generics = set(GenericName.objects.values_list("name", flat=True))
+            existing_generics = set(
+                GenericName.objects.values_list("name", flat=True))
             generics_to_create = set()
             for row in dataset:
                 value = (row[generic_index] or "").strip()
@@ -265,11 +267,13 @@ class ProductImportResource(resources.ModelResource):
                 GenericName.objects.bulk_create(
                     [GenericName(name=name) for name in generics_to_create]
                 )
-                print(f"Pre-created {len(generics_to_create)} GenericName objects")
+                print(
+                    f"Pre-created {len(generics_to_create)} GenericName objects")
 
     def before_import_row(self, row, **kwargs):
         # Clean price fields if they are strings
-        price_fields = ["price", "priceSale", "regular_price", "supplier_price", "mrp"]
+        price_fields = ["price", "priceSale",
+                        "regular_price", "supplier_price", "mrp"]
         for field in price_fields:
             if field in row and isinstance(row[field], str):
                 cleaned = (
@@ -327,7 +331,13 @@ class ProductAdmin(ImportExportModelAdmin):
         extra = 0
         autocomplete_fields = ("branch", "supplier")
 
-    inlines = (ProductBarcodeInline, ProductBatchInline)
+    class ProductVariantInline(admin.TabularInline):
+        model = ProductVariant
+        extra = 1
+        fields = ('size', 'size_name', 'size_code',
+                  'size_qty', 'color', 'price', 'image')
+
+    inlines = (ProductBarcodeInline, ProductBatchInline, ProductVariantInline)
 
     list_display = (
         "name",
@@ -578,7 +588,8 @@ class ProductBatchAdmin(admin.ModelAdmin):
         "receivedAt",
     )
     list_filter = ("branch",)
-    search_fields = ("batch_no", "product__name", "product__sku", "product__code")
+    search_fields = ("batch_no", "product__name",
+                     "product__sku", "product__code")
     autocomplete_fields = ("product", "branch", "supplier")
     list_per_page = 50
     list_filter = ("id",)
@@ -627,11 +638,13 @@ class InventoryItemAdmin(ImportExportModelAdmin):
     fieldsets = (
         (
             "Basic Information",
-            {"fields": ("name", "category", "unit", "sku", "description", "location")},
+            {"fields": ("name", "category", "unit", "sku",
+                        "description", "location")},
         ),
         (
             "Stock Information",
-            {"fields": ("current_stock", "reorder_level", "max_stock", "status")},
+            {"fields": ("current_stock", "reorder_level",
+                        "max_stock", "status")},
         ),
         ("Cost Information", {"fields": ("cost_per_unit", "total_value")}),
         ("Supplier Information", {"fields": ("supplier",)}),
