@@ -60,7 +60,8 @@ class UserViewSet(viewsets.ModelViewSet):
 
         # Fallback: derive company scope from branch access.
         if hasattr(user, "branchAccess") and user.branchAccess.exists():
-            company_ids = set(user.branchAccess.values_list("company_id", flat=True))
+            company_ids = set(user.branchAccess.values_list(
+                "company_id", flat=True))
             return (
                 qs.filter(companyId_id__in=list(company_ids))
                 .select_related("companyId", "resellerId")
@@ -104,11 +105,13 @@ class UserCompanyBranchViewSet(viewsets.ModelViewSet):
         # If user has branch access, further filter by branch overlap
         if user.branchAccess.exists():
             # Get user's branch IDs
-            user_branch_ids = list(user.branchAccess.values_list("id", flat=True))
+            user_branch_ids = list(
+                user.branchAccess.values_list("id", flat=True))
 
             # Filter users who have access to at least one of the same branches
             # This uses the ManyToMany relationship to find overlapping branch access
-            queryset = queryset.filter(branchAccess__id__in=user_branch_ids).distinct()
+            queryset = queryset.filter(
+                branchAccess__id__in=user_branch_ids).distinct()
 
         return queryset.select_related("companyId").prefetch_related("branchAccess")
 
@@ -157,7 +160,8 @@ class UserCompanyBranchViewSet(viewsets.ModelViewSet):
 
         # Get users from same company with access to specific branch
         queryset = (
-            GenUser.objects.filter(companyId=user.companyId, branchAccess__id=branch_id)
+            GenUser.objects.filter(
+                companyId=user.companyId, branchAccess__id=branch_id)
             .distinct()
             .select_related("companyId")
             .prefetch_related("branchAccess")
@@ -246,7 +250,8 @@ class UserCompanyBranchViewSet(viewsets.ModelViewSet):
         permissions_data = request.data.get("permissions", {})
 
         # Validate permissions structure
-        valid_permissions = ["pos", "kitchen", "inventory", "reports", "settings"]
+        valid_permissions = ["pos", "kitchen",
+                             "inventory", "reports", "settings"]
         filtered_permissions = {
             key: bool(value)
             for key, value in permissions_data.items()
@@ -733,7 +738,8 @@ class RestaurantUserViewSet(viewsets.ModelViewSet):
                 updated_count = users.update(role=new_role)
         elif action_type == "update_branch_access":
             raw_branch_access = validated_data.get("branch_access", [])
-            branch_ids = [int(bid) for bid in raw_branch_access if str(bid).isdigit()]
+            branch_ids = [int(bid)
+                          for bid in raw_branch_access if str(bid).isdigit()]
 
             from company.models import Branch
 
@@ -791,7 +797,8 @@ class RestaurantUserViewSet(viewsets.ModelViewSet):
         """Get available user roles"""
         from .models import ROLE_CHOICE
 
-        roles = [{"value": choice[0], "label": choice[1]} for choice in ROLE_CHOICE]
+        roles = [{"value": choice[0], "label": choice[1]}
+                 for choice in ROLE_CHOICE]
         return Response(roles)
 
     @action(detail=False, methods=["get"])
@@ -815,7 +822,8 @@ class RestaurantUserViewSet(viewsets.ModelViewSet):
         for role_code, role_name in ROLE_CHOICE:
             count = queryset.filter(role=role_code).count()
             if count > 0:
-                stats["by_role"][role_code] = {"name": role_name, "count": count}
+                stats["by_role"][role_code] = {
+                    "name": role_name, "count": count}
 
         return Response(stats)
 
@@ -864,7 +872,8 @@ class RestaurantUserViewSet(viewsets.ModelViewSet):
         )
 
         if isinstance(users, list):
-            users_data = [UserManagementSerializer(user).data for user in users]
+            users_data = [UserManagementSerializer(
+                user).data for user in users]
         else:
             users_data = UserManagementSerializer(users, many=True).data
 
