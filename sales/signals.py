@@ -154,7 +154,7 @@ def _apply_stock_delta(
 
 @receiver(post_save, sender="sales.InvoiceItem")
 def _invoice_item_stock_deduct(sender, instance, created, **kwargs):
-    """Deduct product stock when a new InvoiceItem is created via POS.
+    """Deduct product stock (and variant size_qty) when a new InvoiceItem is created.
 
     Stock pool selection
     --------------------
@@ -162,28 +162,48 @@ def _invoice_item_stock_deduct(sender, instance, created, **kwargs):
       → deduct from ``in_stock_secondary``  (e.g. Strips), recompute boxes.
     * ``sold_in_secondary_unit=False`` or no secondary unit on product
       → deduct from ``in_stock``  (primary / Box).
+    * Variant product (``variant_id`` set)
+      → additionally deduct from ``ProductVariant.size_qty``.
     """
     if not created:
         return  # POS items are immutable after creation; no quantity-edit path.
 
-    # Branch + primary-unit: adjust_branch_stock() was already called in the serializer.
-    # Branch + secondary-unit: adjust_branch_stock() was intentionally skipped in the
-    # serializer (it only understands primary/box units), so fall through to the signal.
-    # Non-branch: always handled here.
     product_id = getattr(instance, "product_id", None)
     if not product_id:
         return
 
     quantity = int(getattr(instance, "quantity", 0) or 0)
     sold_in_sec = bool(getattr(instance, "sold_in_secondary_unit", False))
+    variant_id = getattr(instance, "variant_id", None)
 
     try:
         branch_id = getattr(instance.sell_invoice, "branch_id", None)
     except Exception:
         branch_id = None
 
-    # Skip only when the serializer already handled stock via adjust_branch_stock.
-    if branch_id is not None and not sold_in_sec:
+    # ── Variant stock: reduce ProductVariant.size_qty ──────────────────────
+    # This is the single place that decrements variant qty (serializer no longer does it).
+    if variant_id is not None and quantity > 0:
+        from products.models import ProductVariant
+
+        with transaction.atomic():
+            try:
+                v = (
+                    ProductVariant.objects.select_for_update()
+                    .only("size_qty")
+                    .get(pk=variant_id)
+                )
+                new_qty = max(0, (v.size_qty or 0) - quantity)
+                ProductVariant.objects.filter(pk=variant_id).update(size_qty=new_qty)
+            except ProductVariant.DoesNotExist:
+                pass
+
+    # ── Product-level stock ────────────────────────────────────────────────
+    # Skip branch + primary-unit + non-variant: adjust_branch_stock() already
+    # handled it in the serializer.
+    # For variant products we always run _apply_stock_delta so Product.in_stock
+    # stays in sync with total variant quantities sold.
+    if branch_id is not None and not sold_in_sec and variant_id is None:
         return
 
     _apply_stock_delta(product_id, quantity, sold_in_sec, reverse=False)
@@ -266,10 +286,31 @@ def _invoice_item_post_delete(sender, instance, **kwargs):
     # Mirror the create logic: only skip restoration for branch + primary-unit items
     # (those were handled by adjust_branch_stock and have no signal-managed stock entry).
     sold_in_sec = bool(getattr(instance, "sold_in_secondary_unit", False))
+    variant_id = getattr(instance, "variant_id", None)
+
     try:
         branch_id = getattr(instance.sell_invoice, "branch_id", None)
     except Exception:
         branch_id = None
-    if branch_id is not None and not sold_in_sec:
+
+    # ── Restore variant size_qty ─────────────────────────────────────────────
+    if variant_id is not None and qty > 0:
+        from products.models import ProductVariant
+
+        with transaction.atomic():
+            try:
+                v = (
+                    ProductVariant.objects.select_for_update()
+                    .only("size_qty")
+                    .get(pk=variant_id)
+                )
+                ProductVariant.objects.filter(pk=variant_id).update(
+                    size_qty=(v.size_qty or 0) + qty
+                )
+            except ProductVariant.DoesNotExist:
+                pass
+
+    # Mirror the create logic: skip branch + primary-unit + non-variant items.
+    if branch_id is not None and not sold_in_sec and variant_id is None:
         return  # Branch-inventory rollback is not managed here.
     _apply_stock_delta(product_id, qty, sold_in_sec, reverse=True)

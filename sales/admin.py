@@ -11,66 +11,92 @@ from sales.models import Sale, InvoiceItem
 
 @admin.register(Sale)
 class SaleAdmin(admin.ModelAdmin):
-     list_display = (
-          '_invoice_number', 'invoiceFrom', 'invoiceTo',
-          'payment_method', 'status', 'is_paid', 'sales_reference',
-          'due', 'total'
-     )
-     actions = ('discount_30',)
-     list_filter = ('status', 'payment_method', 'invoiceFrom', 'invoiceTo', )
-     exclude = ('user', 'invoiceNumber')
+    list_display = (
+        "_invoice_number",
+        "invoiceFrom",
+        "invoiceTo",
+        "payment_method",
+        "status",
+        "is_paid",
+        "sales_reference",
+        "due",
+        "total",
+    )
+    actions = ("discount_30",)
+    list_filter = (
+        "status",
+        "payment_method",
+        "invoiceFrom",
+        "invoiceTo",
+    )
+    exclude = ("user", "invoiceNumber")
 
-     def discount_30(self, request, queryset):
-          from math import ceil
-          discount = 30  # percentage
+    def discount_30(self, request, queryset):
+        from math import ceil
 
-          for sale in queryset:
-               ''' Set a discount of 30% to selected sales '''
-               multiplier = discount / 100
-               old_price = sale.total
-               discounted_price = ceil(old_price - (old_price * Decimal(multiplier)))
-               sale.total = discounted_price
-               sale.save(update_fields=['total'])
-     discount_30.short_description = 'Set 30%% discount'
+        discount = 30  # percentage
 
-     def _status(self, obj):
-          '''
-          Return the status of the sale colorized in red or green depending on the status.
-          '''
-          return format_html('<span style="color:green">✅Paid</span>') if obj.is_paid else format_html('<span style="color:red">⌛Due</span>')
+        for sale in queryset:
+            """Set a discount of 30% to selected sales"""
+            multiplier = discount / 100
+            old_price = sale.total
+            discounted_price = ceil(old_price - (old_price * Decimal(multiplier)))
+            sale.total = discounted_price
+            sale.save(update_fields=["total"])
 
-     def _invoice_number(self, obj):
-          '''
-          Return the invoice_number colorized in admin.
-          '''
-          return format_html('<span style="color:green;">#{}</span>', obj.invoiceNumber)
+    discount_30.short_description = "Set 30%% discount"
 
-     def save_model(self, request, obj, form, change):
-          '''
-          Associate model with current user while saving.
-          '''
-          obj.user = request.user
-          super().save_model(request, obj, form, change)
+    def _status(self, obj):
+        """
+        Return the status of the sale colorized in red or green depending on the status.
+        """
+        return (
+            format_html('<span style="color:green">✅Paid</span>')
+            if obj.is_paid
+            else format_html('<span style="color:red">⌛Due</span>')
+        )
 
-     # def changelist_view(self, request, extra_context=None):
-     #     ''' Aggregate new customers per day '''
-     #     chart_data = (
-     #         Sale.objects.annotate(date=TruncDay("created_at")).values("date")
-     #         .annotate(y=Count("id"))
-     #         .order_by("-date")
-     #     )
-     #     # Serialize and attach the chart data to the template context
-     #     as_json = json.dumps(list(chart_data), cls=DjangoJSONEncoder)
+    def _invoice_number(self, obj):
+        """
+        Return the invoice_number colorized in admin.
+        """
+        return format_html('<span style="color:green;">#{}</span>', obj.invoiceNumber)
 
-     #     extra_context = extra_context or {"chart_data": as_json}
+    def save_model(self, request, obj, form, change):
+        """
+        Associate model with current user while saving.
+        """
+        obj.user = request.user
+        super().save_model(request, obj, form, change)
 
-     #     # Call the superclass changelist_view to render the page
-     #     return super().changelist_view(request, extra_context=extra_context)
+    # def changelist_view(self, request, extra_context=None):
+    #     ''' Aggregate new customers per day '''
+    #     chart_data = (
+    #         Sale.objects.annotate(date=TruncDay("created_at")).values("date")
+    #         .annotate(y=Count("id"))
+    #         .order_by("-date")
+    #     )
+    #     # Serialize and attach the chart data to the template context
+    #     as_json = json.dumps(list(chart_data), cls=DjangoJSONEncoder)
+
+    #     extra_context = extra_context or {"chart_data": as_json}
+
+    #     # Call the superclass changelist_view to render the page
+    #     return super().changelist_view(request, extra_context=extra_context)
 
 
 @admin.register(InvoiceItem)
-class SaleAdmin(admin.ModelAdmin):
-     list_display = (
-          'id', 'title', 'quantity', 'price', 'code', 'total',
-     )
-     
+class InvoiceItemAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "title",
+        "quantity",
+        "price",
+        "code",
+        "total",
+        "variant_size",
+        "variant_size_name",
+        "variant_color",
+    )
+    list_filter = ("variant_size", "variant_color")
+    search_fields = ("title", "variant_size", "variant_size_name", "variant_color")
