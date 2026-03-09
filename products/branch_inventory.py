@@ -81,7 +81,8 @@ def get_or_create_branch_inventory(product, branch):
     # - If the product is shared (branch=NULL) or for a different branch, start stock at 0.
     if getattr(product, "branch_id", None) and str(product.branch_id) == str(branch.id):
         stock_seed = int(getattr(product, "in_stock", 0) or 0)
-        available_seed = int(getattr(product, "available", stock_seed) or stock_seed)
+        available_seed = int(
+            getattr(product, "available", stock_seed) or stock_seed)
     else:
         stock_seed = 0
         available_seed = 0
@@ -96,7 +97,8 @@ def get_or_create_branch_inventory(product, branch):
         regular_price=getattr(product, "regular_price", 0) or 0,
         in_stock=stock_seed,
         available=available_seed,
-        low_stock_threshold=int(getattr(product, "low_stock_threshold", 20) or 20),
+        low_stock_threshold=int(
+            getattr(product, "low_stock_threshold", 20) or 20),
     )
     return inv
 
@@ -124,13 +126,15 @@ def get_effective_numbers(product, branch) -> EffectiveProductNumbers:
         .first()
     )
     if inv is None:
-        # For shared products with no row yet, treat stock as 0 but keep base price.
+        # No branch-specific row yet.
+        # Fall back to product-level stock so newly created products (which have no
+        # branch inventory row seeded) are never incorrectly seen as zero-stock.
         return EffectiveProductNumbers(
             price=_to_decimal(getattr(product, "price", 0)),
             priceSale=_to_decimal(getattr(product, "priceSale", 0)),
             regular_price=_to_decimal(getattr(product, "regular_price", 0)),
-            in_stock=0,
-            available=0,
+            in_stock=int(getattr(product, "in_stock", 0) or 0),
+            available=int(getattr(product, "available", 0) or 0),
         )
 
     return EffectiveProductNumbers(
@@ -182,7 +186,8 @@ def update_branch_fields(product, branch, *, fields: dict, updated_by=None):
             update_fields.append("available")
         if update_fields:
             # Some code expects these derived fields to be updated.
-            update_fields += ["in_stock_secondary", "updateAt", "status", "inventoryType", "out_of_stock"]
+            update_fields += ["in_stock_secondary", "updateAt",
+                              "status", "inventoryType", "out_of_stock"]
             try:
                 product.save(update_fields=list(dict.fromkeys(update_fields)))
             except Exception:

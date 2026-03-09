@@ -22,6 +22,7 @@ from .models.review_model import Review
 from .models.inventory_model import (
     InventoryItem,
     InventoryCategory,
+    ProductBranchInventory,
     StockMovement,
     ProductStockMovement,
 )
@@ -306,6 +307,21 @@ class ProductImportResource(resources.ModelResource):
         cleaned_row = {k: v for k, v in row.items() if k in allowed_keys}
         return super().import_row(cleaned_row, instance_loader, **kwargs)
 
+@admin.register(ProductBranchInventory)
+class ProductBranchInventoryAdmin(admin.ModelAdmin):
+    list_display = (
+        "product",
+        "branch",
+        "price",
+        "priceSale",
+        "regular_price",
+        "in_stock",
+        "available",
+    )
+    list_filter = ("branch",)
+    search_fields = ("product__name", "product__code", "branch__name", "branch__code")
+    autocomplete_fields = ("product", "branch")
+    list_per_page = 50
 
 @admin.register(ProductStockMovement)
 class ProductStockMovementAdmin(admin.ModelAdmin):
