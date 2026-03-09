@@ -335,7 +335,6 @@ class Product(Timestamp):
     size = models.CharField(
         verbose_name="Size",
         max_length=100,
-        default=0,
         help_text="The numeric or text version of the item's size. Example: Small, Medium, Large, X-Large, XX-Large, etc.",
         null=True,
         blank=True,

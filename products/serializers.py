@@ -3,7 +3,16 @@ from djoser.serializers import UserCreateSerializer
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 from .models import Category
-from .models.product_model import Product, NewLabel, SaleLabel, Size, Image, Tag, Color, ProductVariant
+from .models.product_model import (
+    Product,
+    NewLabel,
+    SaleLabel,
+    Size,
+    Image,
+    Tag,
+    Color,
+    ProductVariant,
+)
 from .models.rating_model import Rating
 from .models.review_model import Review
 from .models.inventory_model import (
@@ -50,22 +59,22 @@ class ProductVariantSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProductVariant
         fields = [
-            'id',
-            'size',
-            'size_name',
-            'size_code',
-            'size_qty',
-            'color',
-            'price',
-            'image',
-            'created_at',
-            'updated_at'
+            "id",
+            "size",
+            "size_name",
+            "size_code",
+            "size_qty",
+            "color",
+            "price",
+            "image",
+            "created_at",
+            "updated_at",
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        read_only_fields = ["id", "created_at", "updated_at"]
 
     def validate(self, data):
         """Ensure at least size or color is provided"""
-        if not data.get('size') and not data.get('color'):
+        if not data.get("size") and not data.get("color"):
             raise serializers.ValidationError(
                 "At least one of 'size' or 'color' must be provided for a variant."
             )
@@ -164,12 +173,10 @@ class ProductSerializer(serializers.ModelSerializer):
     reviews = ReviewSerializer(many=True, required=False)
     tags = serializers.StringRelatedField(many=True, required=False)
     colors = serializers.StringRelatedField(many=True, required=False)
-    variants = ProductVariantSerializer(
-        many=True, required=False, read_only=True)
+    variants = ProductVariantSerializer(many=True, required=False, read_only=True)
 
     # Dual-unit read-only helpers
-    unit_name = serializers.CharField(
-        source="unit.name", read_only=True, default=None)
+    unit_name = serializers.CharField(source="unit.name", read_only=True, default=None)
     secondary_unit_name = serializers.CharField(
         source="secondary_unit.name", read_only=True, default=None
     )
@@ -178,8 +185,7 @@ class ProductSerializer(serializers.ModelSerializer):
         model = Product
         fields = "__all__"
         # Declare extra fields so they appear in the serialized output
-        read_only_fields = (
-            "unit_name", "secondary_unit_name", "in_stock_secondary")
+        read_only_fields = ("unit_name", "secondary_unit_name", "in_stock_secondary")
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -263,12 +269,10 @@ class ProductPostSerializer(serializers.ModelSerializer):
     colors = ColorSerializer(many=True, required=False)
 
     # Variants support for clothing products
-    variants = ProductVariantSerializer(
-        many=True, required=False, read_only=False)
+    variants = ProductVariantSerializer(many=True, required=False, read_only=False)
 
     # Dual-unit read-only helpers
-    unit_name = serializers.CharField(
-        source="unit.name", read_only=True, default=None)
+    unit_name = serializers.CharField(source="unit.name", read_only=True, default=None)
     secondary_unit_name = serializers.CharField(
         source="secondary_unit.name", read_only=True, default=None
     )
@@ -276,17 +280,18 @@ class ProductPostSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = "__all__"
-        read_only_fields = (
-            "unit_name", "secondary_unit_name", "in_stock_secondary")
+        read_only_fields = ("unit_name", "secondary_unit_name", "in_stock_secondary")
 
     def create(self, validated_data):
         from django.db import transaction
 
         # Extract nested data with defaults
         newlabel_data = validated_data.pop(
-            "newLabel", {"enabled": False, "content": "New"})
+            "newLabel", {"enabled": False, "content": "New"}
+        )
         salelabel_data = validated_data.pop(
-            "saleLabel", {"enabled": False, "content": "Sale"})
+            "saleLabel", {"enabled": False, "content": "Sale"}
+        )
         variants_data = validated_data.pop("variants", [])
 
         # Use atomic transaction to ensure data consistency
@@ -303,8 +308,7 @@ class ProductPostSerializer(serializers.ModelSerializer):
             # Create variants if provided
             if variants_data:
                 for variant_data in variants_data:
-                    ProductVariant.objects.create(
-                        product=product, **variant_data)
+                    ProductVariant.objects.create(product=product, **variant_data)
 
         return product
 
@@ -319,31 +323,26 @@ class ProductPostSerializer(serializers.ModelSerializer):
             # Existing rows may have NULL labels; avoid crashing on PATCH.
             if newlabel_data is not None:
                 if instance.newLabel is None:
-                    instance.newLabel = NewLabel.objects.create(
-                        **newlabel_data)
+                    instance.newLabel = NewLabel.objects.create(**newlabel_data)
                     instance.save(update_fields=["newLabel"])
                 else:
                     newlabel_serializer = self.fields["newLabel"]
-                    newlabel_serializer.update(
-                        instance.newLabel, newlabel_data)
+                    newlabel_serializer.update(instance.newLabel, newlabel_data)
 
             if salelabel_data is not None:
                 if instance.saleLabel is None:
-                    instance.saleLabel = SaleLabel.objects.create(
-                        **salelabel_data)
+                    instance.saleLabel = SaleLabel.objects.create(**salelabel_data)
                     instance.save(update_fields=["saleLabel"])
                 else:
                     salelabel_serializer = self.fields["saleLabel"]
-                    salelabel_serializer.update(
-                        instance.saleLabel, salelabel_data)
+                    salelabel_serializer.update(instance.saleLabel, salelabel_data)
 
             # Handle variants update (replace all variants)
             if variants_data is not None:
                 # Delete existing variants and create new ones
                 instance.variants.all().delete()
                 for variant_data in variants_data:
-                    ProductVariant.objects.create(
-                        product=instance, **variant_data)
+                    ProductVariant.objects.create(product=instance, **variant_data)
 
             # Update product fields
             updated_instance = super().update(instance, validated_data)
@@ -468,13 +467,10 @@ class InventoryCategorySerializer(serializers.ModelSerializer):
 
 
 class InventoryItemSerializer(serializers.ModelSerializer):
-    category_name = serializers.CharField(
-        source="category.name", read_only=True)
+    category_name = serializers.CharField(source="category.name", read_only=True)
     unit_name = serializers.CharField(source="unit.name", read_only=True)
-    supplier_name = serializers.CharField(
-        source="supplier.name", read_only=True)
-    status_display = serializers.CharField(
-        source="get_status_display", read_only=True)
+    supplier_name = serializers.CharField(source="supplier.name", read_only=True)
+    status_display = serializers.CharField(source="get_status_display", read_only=True)
     formatted_last_updated = serializers.CharField(read_only=True)
     stock_percentage = serializers.FloatField(read_only=True)
     is_low_stock = serializers.BooleanField(read_only=True)
@@ -566,8 +562,7 @@ class StockMovementSerializer(serializers.ModelSerializer):
 class AddStockSerializer(serializers.Serializer):
     """Serializer for adding stock to inventory items"""
 
-    quantity = serializers.DecimalField(
-        max_digits=10, decimal_places=2, min_value=0.01)
+    quantity = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=0.01)
     reason = serializers.CharField(
         max_length=200, required=False, default="Stock addition"
     )
@@ -576,8 +571,7 @@ class AddStockSerializer(serializers.Serializer):
         max_length=100, required=False, allow_blank=True
     )
     expiry_date = serializers.DateField(required=False, allow_null=True)
-    warranty_expiry_date = serializers.DateField(
-        required=False, allow_null=True)
+    warranty_expiry_date = serializers.DateField(required=False, allow_null=True)
 
 
 class InventoryStatsSerializer(serializers.Serializer):
