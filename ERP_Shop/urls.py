@@ -1,3 +1,32 @@
+from supplier_ledger import urls as SupplierLedger
+from common import urls as Common
+from pharmacy import urls as Pharmacy
+from purchase import urls as Purchase
+from resort import urls as Resort
+from hotel import urls as Hotel
+from reports import urls as Reports
+from dashboard import urls as Dashboard
+from recipe_waste_management import urls as RecipeWasteManagement
+from promotions_discounts import urls as PromotionsDiscounts
+from booking import urls as Booking
+from table_managment import urls as TableManagement
+from menu_items import urls as MenuItems
+from suppliers import urls as Suppliers
+from payroll import urls as Payroll
+from reseller import urls as Reseller
+from portfolio import urls as Portfolio
+from calendar_events import urls as CalendarEvents
+from expense import urls as Expense
+from my_project import urls as Project
+from blog import urls as BlogPost
+from authenticator import urls as GenUser
+from company import urls as Company
+from customers import urls as Customer
+from service import urls as Service
+from sales import urls as Sales
+from review import urls as PeopleReview
+from products import urls as Product
+from order import urls as Orders
 from django.contrib import admin
 from django.urls import path, include
 from django_otp.admin import OTPAdminSite
@@ -11,34 +40,6 @@ admin.site.site_title = "Raktch ERP Platform"
 admin.site.index_title = "Raktch ERP Platform"
 admin.autodiscover()
 
-from order import urls as Orders
-from products import urls as Product
-from review import urls as PeopleReview
-from sales import urls as Sales
-from service import urls as Service
-from customers import urls as Customer
-from company import urls as Company
-from authenticator import urls as GenUser
-from blog import urls as BlogPost
-from my_project import urls as Project
-from expense import urls as Expense
-from calendar_events import urls as CalendarEvents
-from portfolio import urls as Portfolio
-from reseller import urls as Reseller
-from payroll import urls as Payroll
-from suppliers import urls as Suppliers
-from menu_items import urls as MenuItems
-from table_managment import urls as TableManagement
-from booking import urls as Booking
-from promotions_discounts import urls as PromotionsDiscounts
-from recipe_waste_management import urls as RecipeWasteManagement
-from dashboard import urls as Dashboard
-from reports import urls as Reports
-from hotel import urls as Hotel
-from resort import urls as Resort
-from purchase import urls as Purchase
-from pharmacy import urls as Pharmacy
-from common import urls as Common
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -74,4 +75,5 @@ urlpatterns = [
     path("", include(Service)),
     path("", include(Suppliers)),
     path("", include(TableManagement)),
+    path("", include(SupplierLedger)),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

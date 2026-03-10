@@ -108,7 +108,8 @@ class UnitViewSet(viewsets.ModelViewSet):
     """CRUD for Unit.  Used by the frontend Add-Product form to create missing units."""
 
     serializer_class = UnitSerializer
-    http_method_names = ["get", "post", "patch", "put", "delete", "head", "options"]
+    http_method_names = ["get", "post", "patch",
+                         "put", "delete", "head", "options"]
 
     def get_queryset(self):
         return Unit.objects.all().order_by("name")
@@ -180,7 +181,8 @@ class CategoryViewSet(viewsets.ModelViewSet):
         }:
             raise PermissionDenied("You do not have access to this branch")
 
-        branch = Branch.objects.select_related("company").filter(id=branch_id).first()
+        branch = Branch.objects.select_related(
+            "company").filter(id=branch_id).first()
         if not branch:
             raise PermissionDenied("Invalid branch_id")
 
@@ -219,7 +221,8 @@ class CategoryViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         """Auto-assign company from selected branch, fallback to authenticated user company"""
         user = self.request.user
-        company = self._resolve_company_from_branch(user) or self._resolve_company(user)
+        company = self._resolve_company_from_branch(
+            user) or self._resolve_company(user)
 
         if not company:
             raise PermissionDenied(
@@ -278,6 +281,7 @@ class ProductTypeViewSet(viewsets.ModelViewSet):
 
 class GenericNameViewSet(viewsets.ModelViewSet):
     serializer_class = GenericNameSerializer
+    permission_classes = [permissions.IsAuthenticated]
     filter_backends = [
         DjangoFilterBackend,
         filters.SearchFilter,
@@ -288,8 +292,46 @@ class GenericNameViewSet(viewsets.ModelViewSet):
     ordering_fields = ["name", "createdAt", "updatedAt"]
     ordering = ["name"]
 
+    def _resolve_company_from_branch(self, user):
+        """Resolve company from branch_id query/body param, with access validation."""
+        from company.models import Branch
+        from rest_framework.exceptions import PermissionDenied
+
+        branch_id = (
+            self.request.query_params.get("branch_id")
+            or self.request.data.get("branch_id")
+        )
+        if not branch_id:
+            return None
+
+        # For non-superusers validate branch access
+        if not is_unrestricted_user(user):
+            allowed = set()
+            if hasattr(user, "branchAccess") and user.branchAccess.exists():
+                allowed = set(str(b)
+                              for b in user.branchAccess.values_list("id", flat=True))
+                if allowed and str(branch_id) not in allowed:
+                    raise PermissionDenied(
+                        "You do not have access to this branch")
+
+        branch = Branch.objects.select_related(
+            "company").filter(id=branch_id).first()
+        if branch:
+            return branch.company
+        return None
+
     def get_queryset(self):
-        qs = GenericName.objects.all()
+        user = self.request.user
+        qs = GenericName.objects.filter(is_active=True)
+
+        # When branch_id is provided in the request, resolve the company from the
+        # branch and scope to that company — this applies even for superusers so
+        # that the UI only shows the currently-selected company's generic names.
+        company = self._resolve_company_from_branch(user)
+        if company is not None:
+            return qs.filter(companyId=company)
+
+        # Standard company scoping for regular users (superusers see all)
         return apply_company_branch_scope(
             request=self.request,
             queryset=qs,
@@ -300,9 +342,17 @@ class GenericNameViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         user = getattr(self.request, "user", None)
         if user and not is_unrestricted_user(user):
-            serializer.save(companyId=getattr(user, "companyId", None))
+            company = getattr(user, "companyId", None)
+            if company is None:
+                company = self._resolve_company_from_branch(user)
+            serializer.save(companyId=company)
             return
-        serializer.save()
+        # For superusers, still try to scope to the branch's company if provided
+        company = self._resolve_company_from_branch(user)
+        if company is not None:
+            serializer.save(companyId=company)
+        else:
+            serializer.save()
 
 
 class BrandViewSet(viewsets.ModelViewSet):
@@ -374,7 +424,8 @@ class ProductBatchViewSet(viewsets.ModelViewSet):
     ordering = ["exp_date", "-receivedAt"]
 
     def get_queryset(self):
-        qs = ProductBatch.objects.select_related("product", "branch", "supplier").all()
+        qs = ProductBatch.objects.select_related(
+            "product", "branch", "supplier").all()
         return apply_company_branch_scope(
             request=self.request,
             queryset=qs,
@@ -392,7 +443,8 @@ class ProductViewSet(viewsets.ModelViewSet):
     """
 
     serializer_class = ProductSerializer
-    parser_classes = (parsers.MultiPartParser, parsers.FormParser, parsers.JSONParser)
+    parser_classes = (parsers.MultiPartParser,
+                      parsers.FormParser, parsers.JSONParser)
     pagination_class = ProductPagination
     filter_backends = [
         DjangoFilterBackend,
@@ -437,7 +489,8 @@ class ProductViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = (
-            Product.objects.select_related("unit", "supplier", "generic_name", "brand")
+            Product.objects.select_related(
+                "unit", "supplier", "generic_name", "brand")
             .only(
                 "id",
                 "name",
@@ -527,7 +580,8 @@ class ProductViewSet(viewsets.ModelViewSet):
                 not allowed_company_ids
                 or str(requested_company_id) not in allowed_company_ids
             ):
-                raise PermissionDenied("You do not have access to this company")
+                raise PermissionDenied(
+                    "You do not have access to this company")
             qs = qs.filter(companyId_id=requested_company_id)
 
         if branch_id:
@@ -569,7 +623,8 @@ class ProductViewSet(viewsets.ModelViewSet):
                     user.branchAccess.values_list("company_id", flat=True)
                 )
                 if len(company_ids) == 1:
-                    saved = serializer.save(companyId_id=next(iter(company_ids)))
+                    saved = serializer.save(
+                        companyId_id=next(iter(company_ids)))
                 else:
                     saved = serializer.save(companyId=company)
             else:
@@ -761,7 +816,8 @@ class ProductViewSet(viewsets.ModelViewSet):
                 product,
                 branch,
                 delta=qty_int,
-                reason=serializer.validated_data.get("reason", "Stock addition"),
+                reason=serializer.validated_data.get(
+                    "reason", "Stock addition"),
                 notes=serializer.validated_data.get("notes", ""),
                 updated_by=request.user,
             )
@@ -786,9 +842,11 @@ class ProductViewSet(viewsets.ModelViewSet):
                 quantity=qty,
                 previous_stock=Decimal(prev),
                 new_stock=Decimal(new),
-                reason=serializer.validated_data.get("reason", "Stock addition"),
+                reason=serializer.validated_data.get(
+                    "reason", "Stock addition"),
                 notes=serializer.validated_data.get("notes", ""),
-                reference_number=serializer.validated_data.get("reference_number", ""),
+                reference_number=serializer.validated_data.get(
+                    "reference_number", ""),
                 created_by=(
                     request.user.username
                     if request.user and request.user.is_authenticated
@@ -824,7 +882,8 @@ class ProductViewSet(viewsets.ModelViewSet):
                 product,
                 branch,
                 delta=-actual,
-                reason=serializer.validated_data.get("reason", "Stock reduction"),
+                reason=serializer.validated_data.get(
+                    "reason", "Stock reduction"),
                 notes=serializer.validated_data.get("notes", ""),
                 updated_by=request.user,
             )
@@ -850,9 +909,11 @@ class ProductViewSet(viewsets.ModelViewSet):
                 quantity=Decimal(actual),
                 previous_stock=Decimal(prev),
                 new_stock=Decimal(new),
-                reason=serializer.validated_data.get("reason", "Stock reduction"),
+                reason=serializer.validated_data.get(
+                    "reason", "Stock reduction"),
                 notes=serializer.validated_data.get("notes", ""),
-                reference_number=serializer.validated_data.get("reference_number", ""),
+                reference_number=serializer.validated_data.get(
+                    "reference_number", ""),
                 created_by=(
                     request.user.username
                     if request.user and request.user.is_authenticated
@@ -877,7 +938,8 @@ class ProductViewSet(viewsets.ModelViewSet):
 
 class ProductPostSet(viewsets.ModelViewSet):
     serializer_class = ProductPostSerializer
-    parser_classes = (parsers.MultiPartParser, parsers.FormParser, parsers.JSONParser)
+    parser_classes = (parsers.MultiPartParser,
+                      parsers.FormParser, parsers.JSONParser)
 
     def _resolve_company_for_user(self):
         user = getattr(self.request, "user", None)
@@ -889,7 +951,8 @@ class ProductPostSet(viewsets.ModelViewSet):
             return company
 
         if hasattr(user, "branchAccess"):
-            company_ids = set(user.branchAccess.values_list("company_id", flat=True))
+            company_ids = set(user.branchAccess.values_list(
+                "company_id", flat=True))
             if len(company_ids) == 1:
                 from company.models import Company
 
@@ -949,7 +1012,8 @@ class ProductPostSet(viewsets.ModelViewSet):
                 )
                 return
             raise PermissionDenied("User is not associated with a company")
-        serializer.save(companyId=company, branch=self._resolve_branch_for_user())
+        serializer.save(companyId=company,
+                        branch=self._resolve_branch_for_user())
 
     def perform_update(self, serializer):
         user = getattr(self.request, "user", None)
@@ -1017,7 +1081,8 @@ class ProductPostSet(viewsets.ModelViewSet):
             new_stock=Decimal(new),
             reason=serializer.validated_data.get("reason", "Stock addition"),
             notes=serializer.validated_data.get("notes", ""),
-            reference_number=serializer.validated_data.get("reference_number", ""),
+            reference_number=serializer.validated_data.get(
+                "reference_number", ""),
             created_by=(
                 request.user.username
                 if request.user and request.user.is_authenticated
@@ -1067,7 +1132,8 @@ class ProductPostSet(viewsets.ModelViewSet):
             new_stock=Decimal(new),
             reason=serializer.validated_data.get("reason", "Stock reduction"),
             notes=serializer.validated_data.get("notes", ""),
-            reference_number=serializer.validated_data.get("reference_number", ""),
+            reference_number=serializer.validated_data.get(
+                "reference_number", ""),
             created_by=(
                 request.user.username
                 if request.user and request.user.is_authenticated
@@ -1172,7 +1238,8 @@ class PosProductIndexView(APIView):
                 not allowed_company_ids
                 or str(requested_company_id) not in allowed_company_ids
             ):
-                raise PermissionDenied("You do not have access to this company")
+                raise PermissionDenied(
+                    "You do not have access to this company")
             qs = qs.filter(companyId_id=requested_company_id)
 
         updated_since = request.query_params.get(
