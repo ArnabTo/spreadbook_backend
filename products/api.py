@@ -85,8 +85,12 @@ class ProductOptionsView(APIView):
             branch_id_field=None,
         ).order_by("name")
 
-        # Existing models (not company-scoped in current schema)
-        categories_qs = Category.objects.filter(is_active=True).order_by("name")
+        categories_qs = apply_company_branch_scope(
+            request=request,
+            queryset=Category.objects.filter(is_active=True),
+            company_id_field="companyId_id",
+            branch_id_field=None,
+        ).order_by("name")
         units_qs = Unit.objects.filter(status=True).order_by("name")
 
         return Response(
@@ -128,12 +132,101 @@ class UnitViewSet(viewsets.ModelViewSet):
 
 
 class CategoryViewSet(viewsets.ModelViewSet):
-    # queryset = Product.objects.all()
-    serializer_class = CategorySerializer
+    """ViewSet for product categories with company-scoped access"""
 
-    # http_method_names= ['get']
+    serializer_class = CategorySerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ["name"]
+    ordering_fields = ["name", "is_active"]
+    ordering = ["name"]
+
+    def _is_unrestricted_user(self, user) -> bool:
+        return (
+            bool(getattr(user, "is_superuser", False))
+            or getattr(user, "role", None) == "software_owner"
+        )
+
+    def _resolve_company(self, user):
+        if getattr(user, "companyId", None):
+            return user.companyId
+        # Fallback: infer company from branch access if possible
+        branches = user.branchAccess.select_related("company")
+        company_ids = set(branches.values_list("company_id", flat=True))
+        if len(company_ids) == 1 and branches.exists():
+            return branches.first().company
+        return None
+
+    def _get_allowed_branch_ids(self, user):
+        if self._is_unrestricted_user(user):
+            return None
+        if user.branchAccess.exists():
+            return set(user.branchAccess.values_list("id", flat=True))
+        return None
+
+    def _resolve_company_from_branch(self, user):
+        """Resolve company from branch_id query param"""
+        from company.models import Branch
+
+        branch_id = self.request.data.get("branch_id") or self.request.query_params.get(
+            "branch_id"
+        )
+        if not branch_id:
+            return None
+
+        allowed_branch_ids = self._get_allowed_branch_ids(user)
+        if allowed_branch_ids is not None and str(branch_id) not in {
+            str(b) for b in allowed_branch_ids
+        }:
+            raise PermissionDenied("You do not have access to this branch")
+
+        branch = Branch.objects.select_related("company").filter(id=branch_id).first()
+        if not branch:
+            raise PermissionDenied("Invalid branch_id")
+
+        return branch.company
+
     def get_queryset(self):
-        return Category.objects.all()
+        user = self.request.user
+        queryset = Category.objects.select_related("companyId").prefetch_related(
+            "branchId"
+        )
+
+        # Check if branch_id is provided
+        branch_id = self.request.query_params.get("branch_id")
+        if branch_id:
+            company_from_branch = self._resolve_company_from_branch(user)
+            if company_from_branch:
+                return queryset.filter(companyId=company_from_branch, is_active=True)
+
+        # Standard company scoping
+        if not self._is_unrestricted_user(user):
+            company_ids = set()
+            if getattr(user, "companyId_id", None):
+                company_ids.add(user.companyId_id)
+            else:
+                company_ids.update(
+                    user.branchAccess.values_list("company_id", flat=True)
+                )
+
+            if not company_ids:
+                return Category.objects.none()
+
+            queryset = queryset.filter(companyId_id__in=company_ids)
+
+        return queryset.filter(is_active=True)
+
+    def perform_create(self, serializer):
+        """Auto-assign company from selected branch, fallback to authenticated user company"""
+        user = self.request.user
+        company = self._resolve_company_from_branch(user) or self._resolve_company(user)
+
+        if not company:
+            raise PermissionDenied(
+                "Unable to determine company. Provide a valid branch_id or ensure user has company access"
+            )
+
+        serializer.save(companyId=company)
 
 
 class ColorViewSet(viewsets.ModelViewSet):

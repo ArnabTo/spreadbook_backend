@@ -229,36 +229,21 @@ class Sale(Timestamp):
     def generate_order_number(self):
         """Generate unique order number with atomic operation"""
         if not self.order_number:
-            from django.utils import timezone
             from django.db import transaction
-            import uuid
-
-            today = timezone.now().date()
-            company_id = getattr(self, "companyId_id", None)
-            branch_id = getattr(self, "branch_id", None)
-            company_part = str(company_id) if company_id else "0"
-            branch_part = str(branch_id) if branch_id else "0"
-            # Use a shorter date format to keep invoice/order numbers compact.
-            date_part = today.strftime("%y%m%d")
 
             # Use atomic transaction to ensure uniqueness
             with transaction.atomic():
                 # Lock the table to prevent race conditions
                 last_order = (
                     Sale.objects.select_for_update()
-                    .filter(
-                        order_number__isnull=False,
-                        createDate__date=today,
-                        companyId_id=company_id,
-                        branch_id=branch_id,
-                    )
-                    .order_by("-createDate")
+                    .filter(order_number__isnull=False)
+                    .order_by("-id")
                     .first()
                 )
 
                 if last_order and last_order.order_number:
                     try:
-                        # Extract number from ORD-YYYY format
+                        # Extract number from INV-XXXX format
                         last_num = int(last_order.order_number.split("-")[-1])
                         new_num = last_num + 1
                     except (ValueError, IndexError):
@@ -266,26 +251,13 @@ class Sale(Timestamp):
                 else:
                     new_num = 1
 
-                # Format (multi-tenant safe):
-                # ORD-{companyId}-{branchId}-{YYMMDD}-{N}
-                potential_order_number = (
-                    f"ORD-{company_part}-{branch_part}-{date_part}-{new_num}"
-                )
+                # Format: INV-0001, INV-0002, etc.
+                potential_order_number = f"INV-{new_num:04d}"
 
-                # Double-check uniqueness and add timestamp if needed
+                # Double-check uniqueness
                 while Sale.objects.filter(order_number=potential_order_number).exists():
                     new_num += 1
-                    potential_order_number = (
-                        f"ORD-{company_part}-{branch_part}-{date_part}-{new_num}"
-                    )
-
-                    # Fallback: add unique suffix if we hit too many collisions
-                    if new_num > 9999:
-                        timestamp_suffix = str(int(timezone.now().timestamp() * 1000))[
-                            -6:
-                        ]
-                        potential_order_number = f"ORD-{company_part}-{branch_part}-{date_part}-{timestamp_suffix}"
-                        break
+                    potential_order_number = f"INV-{new_num:04d}"
 
                 self.order_number = potential_order_number
 
@@ -363,13 +335,9 @@ class Sale(Timestamp):
         if not self.share_token:
             self.generate_share_token()
 
-        # Auto-set invoice number if not provided
+        # Auto-set invoice number to match order number
         if not self.invoiceNumber and self.order_number:
-            if self.order_number.startswith("ORD-"):
-                self.invoiceNumber = "INV-" + self.order_number[len("ORD-") :]
-            else:
-                # Backward-compatible fallback
-                self.invoiceNumber = self.order_number.replace("ORD", "INV")
+            self.invoiceNumber = self.order_number
 
         # Update payment status based on status
         if self.status == "paid":

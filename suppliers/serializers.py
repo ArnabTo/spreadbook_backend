@@ -2,9 +2,95 @@ from decimal import Clamped
 from djoser.serializers import UserCreateSerializer
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
-from .models import Supplier
+from .models import Supplier, SupplierCategory
 
 User = get_user_model()
+
+
+class SupplierCategorySerializer(serializers.ModelSerializer):
+    """Serializer for SupplierCategory model"""
+
+    supplier_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SupplierCategory
+        fields = [
+            "id",
+            "name",
+            "description",
+            "companyId",
+            "is_active",
+            "created_at",
+            "updated_at",
+            "supplier_count",
+        ]
+        read_only_fields = ("id", "created_at", "updated_at", "companyId")
+
+    def get_supplier_count(self, obj):
+        """Return the number of suppliers in this category"""
+        return obj.suppliers.count()
+
+    def create(self, validated_data):
+        """Create a new supplier category"""
+        # Set company from request user if not provided
+        if "companyId" not in validated_data:
+            request = self.context.get("request")
+            if request and hasattr(request, "user") and request.user.is_authenticated:
+                if hasattr(request.user, "companyId") and request.user.companyId:
+                    validated_data["companyId"] = request.user.companyId
+                else:
+                    raise serializers.ValidationError(
+                        {"companyId": "User must be associated with a company"}
+                    )
+
+        return super().create(validated_data)
+
+    def validate_name(self, value):
+        """Ensure category name is unique within the company"""
+        request = self.context.get("request")
+        if request and hasattr(request, "user"):
+            companyId = None
+
+            branch_id = (
+                request.data.get("branch_id") if hasattr(request, "data") else None
+            )
+            if not branch_id:
+                branch_id = request.query_params.get("branch_id")
+
+            if branch_id:
+                try:
+                    from company.models import Branch
+
+                    branch = (
+                        Branch.objects.select_related("company")
+                        .filter(id=branch_id)
+                        .first()
+                    )
+                    if branch:
+                        companyId = branch.company
+                except Exception:
+                    companyId = None
+
+            if companyId is None and hasattr(request.user, "companyId"):
+                companyId = request.user.companyId
+
+            if companyId:
+                # Check if updating existing category
+                instance = self.instance
+                query = SupplierCategory.objects.filter(
+                    name__iexact=value, companyId=companyId
+                )
+
+                # Exclude current instance if updating
+                if instance:
+                    query = query.exclude(id=instance.id)
+
+                if query.exists():
+                    raise serializers.ValidationError(
+                        f"A category with name '{value}' already exists for this company"
+                    )
+
+        return value
 
 
 class SupplierSerializer(serializers.ModelSerializer):
@@ -14,6 +100,16 @@ class SupplierSerializer(serializers.ModelSerializer):
         max_digits=3, decimal_places=1, min_value=0, max_value=5, required=False
     )
     phone = serializers.CharField()
+
+    # Nested category representation for read operations
+    category_detail = SupplierCategorySerializer(source="category", read_only=True)
+    # Allow category ID for write operations
+    category = serializers.PrimaryKeyRelatedField(
+        queryset=SupplierCategory.objects.all(), required=False, allow_null=True
+    )
+
+    # Image field
+    image = serializers.ImageField(required=False, allow_null=True)
 
     class Meta:
         model = Supplier
@@ -34,6 +130,8 @@ class SupplierSerializer(serializers.ModelSerializer):
             "updated_at",
             # Business fields now part of the model
             "category",
+            "category_detail",
+            "image",
             "contactPerson",
             "paymentTerms",
             "status",
@@ -41,7 +139,13 @@ class SupplierSerializer(serializers.ModelSerializer):
             "totalPurchases",
             "totalSpent",
         ]
-        read_only_fields = ("id", "created_at", "updated_at", "totalPurchases")
+        read_only_fields = (
+            "id",
+            "created_at",
+            "updated_at",
+            "totalPurchases",
+            "category_detail",
+        )
 
     def to_representation(self, instance):
         """Customize the output representation"""

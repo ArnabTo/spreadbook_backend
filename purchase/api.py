@@ -5,6 +5,7 @@ from django.db import transaction
 from django.db.models import F
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
@@ -435,20 +436,84 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         return _get_permission_instances()
 
     def get_queryset(self):
-        return (
-            PurchaseOrder.objects.select_related("supplier", "requisition")
+        qs = (
+            PurchaseOrder.objects.select_related("supplier", "requisition", "branch")
             .prefetch_related("items")
             .all()
             .order_by("-created_at")
         )
 
+        supplier_id = self.request.query_params.get(
+            "supplier"
+        ) or self.request.query_params.get("supplier_id")
+        if supplier_id:
+            qs = qs.filter(supplier_id=supplier_id)
+
+        branch_id = self.request.query_params.get(
+            "branch"
+        ) or self.request.query_params.get("branch_id")
+        if branch_id:
+            qs = qs.filter(branch_id=branch_id)
+
+        user = getattr(self.request, "user", None)
+        if user and user.is_authenticated:
+            is_unrestricted = (
+                bool(getattr(user, "is_superuser", False))
+                or getattr(user, "role", None) == "software_owner"
+            )
+            if not is_unrestricted:
+                allowed_branch_ids = set()
+                if hasattr(user, "branchAccess") and user.branchAccess.exists():
+                    allowed_branch_ids.update(
+                        user.branchAccess.values_list("id", flat=True)
+                    )
+
+                if allowed_branch_ids:
+                    if branch_id and str(branch_id) not in {
+                        str(bid) for bid in allowed_branch_ids
+                    }:
+                        raise PermissionDenied("You do not have access to this branch")
+                    qs = qs.filter(branch_id__in=allowed_branch_ids)
+                elif getattr(user, "companyId_id", None):
+                    qs = qs.filter(branch__company_id=user.companyId_id)
+                else:
+                    qs = qs.none()
+
+        return qs
+
     def perform_create(self, serializer):
         created_by = None
+        branch_id = self.request.data.get("branch") or self.request.data.get(
+            "branch_id"
+        )
+
         if self.request.user and self.request.user.is_authenticated:
+            is_unrestricted = (
+                bool(getattr(self.request.user, "is_superuser", False))
+                or getattr(self.request.user, "role", None) == "software_owner"
+            )
             created_by = getattr(self.request.user, "username", None) or str(
                 self.request.user
             )
-        serializer.save(created_by=created_by)
+            if not branch_id and hasattr(self.request.user, "branchAccess"):
+                default_branch = self.request.user.branchAccess.first()
+                if default_branch:
+                    branch_id = default_branch.id
+
+            if (
+                branch_id
+                and not is_unrestricted
+                and hasattr(self.request.user, "branchAccess")
+            ):
+                allowed_branch_ids = set(
+                    self.request.user.branchAccess.values_list("id", flat=True)
+                )
+                if allowed_branch_ids and str(branch_id) not in {
+                    str(bid) for bid in allowed_branch_ids
+                }:
+                    raise PermissionDenied("You do not have access to this branch")
+
+        serializer.save(created_by=created_by, branch_id=branch_id)
 
     def update(self, request, *args, **kwargs):
         po: PurchaseOrder = self.get_object()

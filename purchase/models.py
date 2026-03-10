@@ -184,6 +184,13 @@ class PurchaseOrder(Timestamp):
     supplier = models.ForeignKey(
         Supplier, on_delete=models.SET_NULL, null=True, blank=True
     )
+    branch = models.ForeignKey(
+        "company.Branch",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="purchase_orders",
+    )
 
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="draft")
     order_date = models.DateField(default=now)

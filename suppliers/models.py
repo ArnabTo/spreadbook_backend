@@ -7,6 +7,51 @@ from utils.models.common_fields import Timestamp
 import uuid
 
 
+class SupplierCategory(Timestamp):
+    """
+    Supplier Category model for storing supplier categories company-wise
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(
+        max_length=100,
+        verbose_name=_("Category Name"),
+        help_text=_("Name of the supplier category"),
+    )
+    companyId = models.ForeignKey(
+        "company.Company",
+        on_delete=models.CASCADE,
+        related_name="supplier_categories",
+        verbose_name=_("Company"),
+    )
+    description = models.TextField(
+        blank=True,
+        null=True,
+        verbose_name=_("Description"),
+        help_text=_("Optional description for this category"),
+    )
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name=_("Is Active"),
+        help_text=_("Whether this category is currently active"),
+    )
+
+    class Meta:
+        verbose_name = _("Supplier Category")
+        verbose_name_plural = _("Supplier Categories")
+        ordering = ["name"]
+        unique_together = [["name", "companyId"]]
+        indexes = [
+            models.Index(fields=["companyId", "is_active"]),
+            models.Index(fields=["name"]),
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.name} ({self.companyId.name if self.companyId else 'No Company'})"
+        )
+
+
 class Supplier(Timestamp):
     """
     Supplier model for storing supplier data🛢
@@ -16,17 +61,6 @@ class Supplier(Timestamp):
         ("Active", "Active"),
         ("Inactive", "Inactive"),
         ("Suspended", "Suspended"),
-    ]
-
-    CATEGORY_CHOICES = [
-        ("Meat & Poultry", "Meat & Poultry"),
-        ("Herbs & Spices", "Herbs & Spices"),
-        ("Spices & Condiments", "Spices & Condiments"),
-        ("Fish & Seafood", "Fish & Seafood"),
-        ("Beverages & Dairy", "Beverages & Dairy"),
-        ("Vegetables & Fruits", "Vegetables & Fruits"),
-        ("General", "General"),
-        ("Other", "Other"),
     ]
 
     PAYMENT_TERMS_CHOICES = [
@@ -63,7 +97,9 @@ class Supplier(Timestamp):
         max_length=200, verbose_name=_("Supplier Address"), null=True, blank=True
     )
     phone = models.CharField(max_length=20, null=True, blank=True)
-    email = models.CharField(max_length=100, verbose_name=_("Supplier Email"), null=True, blank=True)
+    email = models.CharField(
+        max_length=100, verbose_name=_("Supplier Email"), null=True, blank=True
+    )
     zip_code = models.CharField(max_length=10, blank=True, null=True)
     country = models.CharField(max_length=100, default="BD", null=True, blank=True)
     fax = models.CharField(
@@ -77,13 +113,22 @@ class Supplier(Timestamp):
     )
 
     # Additional frontend-specific fields
-    category = models.CharField(
-        max_length=50,
-        choices=CATEGORY_CHOICES,
-        default="General",
-        verbose_name=_("Supplier Category"),
+    category = models.ForeignKey(
+        SupplierCategory,
+        on_delete=models.SET_NULL,
         null=True,
         blank=True,
+        related_name="suppliers",
+        verbose_name=_("Supplier Category"),
+        help_text=_("Category of this supplier"),
+    )
+
+    image = models.ImageField(
+        upload_to="supplier_images/",
+        null=True,
+        blank=True,
+        verbose_name=_("Supplier Image"),
+        help_text=_("Profile image or logo of the supplier"),
     )
 
     contactPerson = models.CharField(

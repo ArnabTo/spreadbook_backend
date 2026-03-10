@@ -5,11 +5,127 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.exceptions import PermissionDenied
 from django.db.models import Q
-from .models import Supplier
-from .serializers import SupplierSerializer
+from company.models import Branch
+from .models import Supplier, SupplierCategory
+from .serializers import SupplierSerializer, SupplierCategorySerializer
 from .pagination import SupplierPagination
 from rest_framework import viewsets, permissions
 from rest_framework.filters import SearchFilter, OrderingFilter
+
+
+class SupplierCategoryViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing Supplier Categories
+    Supports CRUD operations for supplier categories scoped by company
+    """
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = SupplierCategorySerializer
+    filter_backends = [SearchFilter, OrderingFilter]
+    search_fields = ["name", "description"]
+    ordering_fields = ["name", "created_at", "is_active"]
+    ordering = ["name"]
+
+    def _get_allowed_branch_ids(self, user):
+        if self._is_unrestricted_user(user):
+            return None
+        if user.branchAccess.exists():
+            return set(user.branchAccess.values_list("id", flat=True))
+        return None
+
+    def _resolve_company_from_branch(self, user):
+        branch_id = self.request.data.get("branch_id") or self.request.query_params.get(
+            "branch_id"
+        )
+        if not branch_id:
+            return None
+
+        allowed_branch_ids = self._get_allowed_branch_ids(user)
+        if allowed_branch_ids is not None and str(branch_id) not in {
+            str(b) for b in allowed_branch_ids
+        }:
+            raise PermissionDenied("You do not have access to this branch")
+
+        branch = Branch.objects.select_related("company").filter(id=branch_id).first()
+        if not branch:
+            raise PermissionDenied("Invalid branch_id")
+
+        return branch.company
+
+    def _is_unrestricted_user(self, user) -> bool:
+        return (
+            bool(getattr(user, "is_superuser", False))
+            or getattr(user, "role", None) == "software_owner"
+        )
+
+    def _resolve_company(self, user):
+        if getattr(user, "companyId", None):
+            return user.companyId
+
+        # Fallback: infer company from branch access if possible
+        branches = user.branchAccess.select_related("company")
+        company_ids = set(branches.values_list("company_id", flat=True))
+        if len(company_ids) == 1 and branches.exists():
+            return branches.first().company
+
+        return None
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = SupplierCategory.objects.all()
+
+        branch_id = self.request.query_params.get("branch_id")
+        if branch_id:
+            company_from_branch = self._resolve_company_from_branch(user)
+            if company_from_branch:
+                queryset = queryset.filter(companyId=company_from_branch)
+                is_active = self.request.query_params.get("is_active")
+                if is_active is not None:
+                    queryset = queryset.filter(is_active=is_active.lower() == "true")
+                return queryset.select_related("companyId").prefetch_related(
+                    "suppliers"
+                )
+
+        if not self._is_unrestricted_user(user):
+            # Company scoping (multi-tenant safety)
+            company_ids = set()
+            if getattr(user, "companyId_id", None):
+                company_ids.add(user.companyId_id)
+            else:
+                company_ids.update(
+                    user.branchAccess.values_list("company_id", flat=True)
+                )
+
+            if not company_ids:
+                return SupplierCategory.objects.none()
+
+            queryset = queryset.filter(companyId_id__in=company_ids)
+
+        # Filter by is_active if requested
+        is_active = self.request.query_params.get("is_active")
+        if is_active is not None:
+            queryset = queryset.filter(is_active=is_active.lower() == "true")
+
+        return queryset.select_related("companyId").prefetch_related("suppliers")
+
+    def perform_create(self, serializer):
+        """Auto-assign company from selected branch, fallback to authenticated user company"""
+        user = self.request.user
+        company = self._resolve_company_from_branch(user) or self._resolve_company(user)
+
+        if not company:
+            raise PermissionDenied(
+                "Unable to determine company. Provide a valid branch_id or ensure user has company access"
+            )
+
+        serializer.save(companyId=company)
+
+    @action(detail=False, methods=["get"])
+    def active(self, request):
+        """Get only active categories for the user's company"""
+        queryset = self.get_queryset().filter(is_active=True)
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
 
 class SupplierViewSet(viewsets.ModelViewSet):
@@ -52,7 +168,7 @@ class SupplierViewSet(viewsets.ModelViewSet):
         "address",
         "country",
         "contactPerson",
-        "category",
+        "category__name",
     ]
 
     # Ordering fields
@@ -62,14 +178,20 @@ class SupplierViewSet(viewsets.ModelViewSet):
         "updated_at",
         "rating",
         "totalSpent",
-        "category",
+        "category__name",
         "status",
     ]
     ordering = ["-created_at"]
 
     def get_queryset(self):
         user = self.request.user
-        queryset = Supplier.objects.all()
+        queryset = Supplier.objects.select_related(
+            "category", "companyId"
+        ).prefetch_related("branchId")
+
+        requested_company_id = self.request.query_params.get(
+            "company_id"
+        ) or self.request.query_params.get("companyId")
 
         if not self._is_unrestricted_user(user):
             # Company scoping (multi-tenant safety)
@@ -84,23 +206,31 @@ class SupplierViewSet(viewsets.ModelViewSet):
             if not company_ids:
                 return Supplier.objects.none()
 
-            queryset = queryset.filter(companyId_id__in=company_ids)
+            if requested_company_id:
+                if str(requested_company_id) not in {str(cid) for cid in company_ids}:
+                    raise PermissionDenied("You do not have access to this company")
+                queryset = queryset.filter(companyId_id=requested_company_id)
+            else:
+                queryset = queryset.filter(companyId_id__in=company_ids)
 
-            # Optional branch scoping when branchAccess is explicitly assigned
-            allowed_branch_ids = self._get_allowed_branch_ids(user)
-            branch_id = self.request.query_params.get(
-                "branch_id"
-            ) or self.request.query_params.get("branchId")
-            if branch_id:
-                if allowed_branch_ids is not None and branch_id not in {
-                    str(b) for b in allowed_branch_ids
-                }:
-                    raise PermissionDenied("You do not have access to this branch")
-                queryset = queryset.filter(branchId__id=branch_id)
-            elif allowed_branch_ids is not None:
-                queryset = queryset.filter(
-                    Q(branchId__id__in=allowed_branch_ids) | Q(branchId__isnull=True)
-                )
+            # Optional branch scoping when branchAccess is explicitly assigned.
+            # If explicit company filtering is requested, keep result company-wise.
+            if not requested_company_id:
+                allowed_branch_ids = self._get_allowed_branch_ids(user)
+                branch_id = self.request.query_params.get(
+                    "branch_id"
+                ) or self.request.query_params.get("branchId")
+                if branch_id:
+                    if allowed_branch_ids is not None and branch_id not in {
+                        str(b) for b in allowed_branch_ids
+                    }:
+                        raise PermissionDenied("You do not have access to this branch")
+                    queryset = queryset.filter(branchId__id=branch_id)
+                elif allowed_branch_ids is not None:
+                    queryset = queryset.filter(
+                        Q(branchId__id__in=allowed_branch_ids)
+                        | Q(branchId__isnull=True)
+                    )
 
             queryset = queryset.distinct()
 
@@ -110,7 +240,10 @@ class SupplierViewSet(viewsets.ModelViewSet):
         min_rating = self.request.query_params.get("min_rating", None)
 
         if category and category != "all":
-            queryset = queryset.filter(category=category)
+            # Support both category ID and name filtering
+            queryset = queryset.filter(
+                Q(category__id=category) | Q(category__name__iexact=category)
+            )
 
         if status_filter and status_filter != "all":
             queryset = queryset.filter(status=status_filter)

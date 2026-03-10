@@ -238,6 +238,26 @@ class Company(models.Model):
         help_text="List of enabled features (e.g., ['pos', 'inventory', 'booking'])",
     )
 
+    # Receipt header fields
+    company_title_line1 = models.CharField(
+        max_length=200,
+        blank=True,
+        null=True,
+        help_text="First subtitle line for receipt header (e.g., 'MEN'S . WOMEN'S . KIDS')",
+    )
+    company_title_line2 = models.CharField(
+        max_length=200,
+        blank=True,
+        null=True,
+        help_text="Second subtitle line for receipt header (e.g., 'A Concern of Khan Revive Group')",
+    )
+    company_website = models.CharField(
+        max_length=200,
+        blank=True,
+        null=True,
+        help_text="Company website for receipt header (e.g., 'aramun.com.bd')",
+    )
+
     class Meta:
         verbose_name = "Company"
         verbose_name_plural = "Companies"

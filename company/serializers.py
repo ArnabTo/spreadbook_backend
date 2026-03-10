@@ -255,6 +255,10 @@ class CompanySerializer(serializers.ModelSerializer):
             "customization_details",
             "customization",
             "features",
+            # Receipt header fields
+            "company_title_line1",
+            "company_title_line2",
+            "company_website",
         ]
         read_only_fields = [
             "id",

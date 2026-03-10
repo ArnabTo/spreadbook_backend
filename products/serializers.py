@@ -119,8 +119,15 @@ class CategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = Category
         fields = "__all__"
+        read_only_fields = ("id", "companyId", "created_at", "updated_at")
 
     def create(self, validated_data):
+        """Auto-assign companyId from request context"""
+        if "companyId" not in validated_data:
+            request = self.context.get("request")
+            if request and hasattr(request, "user") and request.user.is_authenticated:
+                if hasattr(request.user, "companyId") and request.user.companyId:
+                    validated_data["companyId"] = request.user.companyId
         return super().create(validated_data)
 
     def update(self, instance, validated_data):
@@ -173,12 +180,10 @@ class ProductSerializer(serializers.ModelSerializer):
     reviews = ReviewSerializer(many=True, required=False)
     tags = serializers.StringRelatedField(many=True, required=False)
     colors = serializers.StringRelatedField(many=True, required=False)
-    variants = ProductVariantSerializer(
-        many=True, required=False, read_only=True)
+    variants = ProductVariantSerializer(many=True, required=False, read_only=True)
 
     # Dual-unit read-only helpers
-    unit_name = serializers.CharField(
-        source="unit.name", read_only=True, default=None)
+    unit_name = serializers.CharField(source="unit.name", read_only=True, default=None)
     secondary_unit_name = serializers.CharField(
         source="secondary_unit.name", read_only=True, default=None
     )
@@ -187,8 +192,7 @@ class ProductSerializer(serializers.ModelSerializer):
         model = Product
         fields = "__all__"
         # Declare extra fields so they appear in the serialized output
-        read_only_fields = (
-            "unit_name", "secondary_unit_name", "in_stock_secondary")
+        read_only_fields = ("unit_name", "secondary_unit_name", "in_stock_secondary")
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -272,12 +276,10 @@ class ProductPostSerializer(serializers.ModelSerializer):
     colors = ColorSerializer(many=True, required=False)
 
     # Variants support for clothing products
-    variants = ProductVariantSerializer(
-        many=True, required=False, read_only=False)
+    variants = ProductVariantSerializer(many=True, required=False, read_only=False)
 
     # Dual-unit read-only helpers
-    unit_name = serializers.CharField(
-        source="unit.name", read_only=True, default=None)
+    unit_name = serializers.CharField(source="unit.name", read_only=True, default=None)
     secondary_unit_name = serializers.CharField(
         source="secondary_unit.name", read_only=True, default=None
     )
@@ -285,8 +287,7 @@ class ProductPostSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = "__all__"
-        read_only_fields = (
-            "unit_name", "secondary_unit_name", "in_stock_secondary")
+        read_only_fields = ("unit_name", "secondary_unit_name", "in_stock_secondary")
 
     def create(self, validated_data):
         from django.db import transaction
@@ -314,14 +315,14 @@ class ProductPostSerializer(serializers.ModelSerializer):
             # Create variants if provided
             if variants_data:
                 for variant_data in variants_data:
-                    ProductVariant.objects.create(
-                        product=product, **variant_data)
+                    ProductVariant.objects.create(product=product, **variant_data)
 
             # Seed a ProductBranchInventory row so per-branch stock/price lookups
             # work correctly from the moment the product is created.
             product_branch = getattr(product, "branch", None)
             if product_branch is not None:
                 from products.branch_inventory import get_or_create_branch_inventory
+
                 get_or_create_branch_inventory(product, product_branch)
 
         return product
@@ -337,31 +338,26 @@ class ProductPostSerializer(serializers.ModelSerializer):
             # Existing rows may have NULL labels; avoid crashing on PATCH.
             if newlabel_data is not None:
                 if instance.newLabel is None:
-                    instance.newLabel = NewLabel.objects.create(
-                        **newlabel_data)
+                    instance.newLabel = NewLabel.objects.create(**newlabel_data)
                     instance.save(update_fields=["newLabel"])
                 else:
                     newlabel_serializer = self.fields["newLabel"]
-                    newlabel_serializer.update(
-                        instance.newLabel, newlabel_data)
+                    newlabel_serializer.update(instance.newLabel, newlabel_data)
 
             if salelabel_data is not None:
                 if instance.saleLabel is None:
-                    instance.saleLabel = SaleLabel.objects.create(
-                        **salelabel_data)
+                    instance.saleLabel = SaleLabel.objects.create(**salelabel_data)
                     instance.save(update_fields=["saleLabel"])
                 else:
                     salelabel_serializer = self.fields["saleLabel"]
-                    salelabel_serializer.update(
-                        instance.saleLabel, salelabel_data)
+                    salelabel_serializer.update(instance.saleLabel, salelabel_data)
 
             # Handle variants update (replace all variants)
             if variants_data is not None:
                 # Delete existing variants and create new ones
                 instance.variants.all().delete()
                 for variant_data in variants_data:
-                    ProductVariant.objects.create(
-                        product=instance, **variant_data)
+                    ProductVariant.objects.create(product=instance, **variant_data)
 
             # Update product fields
             updated_instance = super().update(instance, validated_data)
@@ -486,13 +482,10 @@ class InventoryCategorySerializer(serializers.ModelSerializer):
 
 
 class InventoryItemSerializer(serializers.ModelSerializer):
-    category_name = serializers.CharField(
-        source="category.name", read_only=True)
+    category_name = serializers.CharField(source="category.name", read_only=True)
     unit_name = serializers.CharField(source="unit.name", read_only=True)
-    supplier_name = serializers.CharField(
-        source="supplier.name", read_only=True)
-    status_display = serializers.CharField(
-        source="get_status_display", read_only=True)
+    supplier_name = serializers.CharField(source="supplier.name", read_only=True)
+    status_display = serializers.CharField(source="get_status_display", read_only=True)
     formatted_last_updated = serializers.CharField(read_only=True)
     stock_percentage = serializers.FloatField(read_only=True)
     is_low_stock = serializers.BooleanField(read_only=True)
@@ -584,8 +577,7 @@ class StockMovementSerializer(serializers.ModelSerializer):
 class AddStockSerializer(serializers.Serializer):
     """Serializer for adding stock to inventory items"""
 
-    quantity = serializers.DecimalField(
-        max_digits=10, decimal_places=2, min_value=0.01)
+    quantity = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=0.01)
     reason = serializers.CharField(
         max_length=200, required=False, default="Stock addition"
     )
@@ -594,8 +586,7 @@ class AddStockSerializer(serializers.Serializer):
         max_length=100, required=False, allow_blank=True
     )
     expiry_date = serializers.DateField(required=False, allow_null=True)
-    warranty_expiry_date = serializers.DateField(
-        required=False, allow_null=True)
+    warranty_expiry_date = serializers.DateField(required=False, allow_null=True)
 
 
 class InventoryStatsSerializer(serializers.Serializer):

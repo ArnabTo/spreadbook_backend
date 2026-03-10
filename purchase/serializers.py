@@ -135,6 +135,7 @@ class PurchaseOrderItemSerializer(serializers.ModelSerializer):
 class PurchaseOrderSerializer(serializers.ModelSerializer):
     items = PurchaseOrderItemSerializer(many=True)
     supplier_name = serializers.CharField(source="supplier.name", read_only=True)
+    branch_name = serializers.CharField(source="branch.name", read_only=True)
     requisition_number = serializers.CharField(
         source="requisition.pr_number", read_only=True
     )
@@ -146,6 +147,8 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
             "po_number",
             "supplier",
             "supplier_name",
+            "branch",
+            "branch_name",
             "requisition",
             "requisition_number",
             "status",

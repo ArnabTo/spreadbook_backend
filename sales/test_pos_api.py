@@ -71,7 +71,7 @@ class POSOrderAPITest(TestCase):
 
         # Check totals were calculated
         self.assertGreater(order.totalAmount, 0)
-        self.assertTrue(order.order_number.startswith("ORD-"))
+        self.assertTrue(order.order_number.startswith("INV-"))
 
         # Verify service charge + tip math using the API response payload fields.
         # Subtotal = (250*2) + (80*1) = 580

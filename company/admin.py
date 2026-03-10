@@ -51,6 +51,9 @@ class CompanyAdmin(admin.ModelAdmin):
                     "avatarUrl",
                     "logo",
                     "url",
+                    "company_website",
+                    "company_title_line1",
+                    "company_title_line2",
                 )
             },
         ),

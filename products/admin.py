@@ -502,6 +502,9 @@ class ProductAdmin(ImportExportModelAdmin):
 
     branchname.short_description = "Branch"
 
+@admin.register(ProductVariant)
+class ProductVariantAdmin(ImportExportModelAdmin):
+    list_display = ("product", "size")
 
 @admin.register(Category)
 class CategoryAdmin(ImportExportModelAdmin):
