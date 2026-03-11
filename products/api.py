@@ -689,6 +689,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                 "model",
                 "coverUrl",
                 "image",
+                "size"
                 "subDescription",
                 "unit",
                 "price",
@@ -758,6 +759,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                 "model",
                 "coverUrl",
                 "image",
+                "size",
                 "subDescription",
                 "unit",
                 "price",
