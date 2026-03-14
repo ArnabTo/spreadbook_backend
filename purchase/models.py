@@ -14,11 +14,14 @@ class Purchase(Timestamp):
     Purchase model for storing purchase data🛢
     """
 
-    uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    uuid = models.UUIDField(
+        primary_key=True, default=uuid.uuid4, editable=False)
     product = models.ForeignKey(Product, on_delete=models.DO_NOTHING)
     supplier = models.ForeignKey(Supplier, on_delete=models.DO_NOTHING)
-    invoice_number = models.CharField(max_length=4, unique=True, null=True, blank=True)
-    purchase_id = models.CharField(max_length=8, unique=True, null=True, blank=True)
+    invoice_number = models.CharField(
+        max_length=4, unique=True, null=True, blank=True)
+    purchase_id = models.CharField(
+        max_length=8, unique=True, null=True, blank=True)
     purchase_date = models.DateField(verbose_name="Purchase Date", default=now)
     payment_options = (
         ("cash payment", "Cash Payment"),
@@ -32,9 +35,12 @@ class Purchase(Timestamp):
         default="cash payment",
     )
     details = models.TextField(verbose_name="Details", null=True, blank=True)
-    discount = models.DecimalField(max_digits=5, decimal_places=2, default=0.00)
-    paid_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
-    due_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    discount = models.DecimalField(
+        max_digits=5, decimal_places=2, default=0.00)
+    paid_amount = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0.00)
+    due_amount = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0.00)
     total_amount = models.DecimalField(max_digits=10, decimal_places=2)
 
     def save(self, *args, **kwargs):
@@ -75,14 +81,16 @@ class PurchaseRequisition(Timestamp):
         ("urgent", "Urgent"),
     )
 
-    uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    uuid = models.UUIDField(
+        primary_key=True, default=uuid.uuid4, editable=False)
     pr_number = models.CharField(max_length=20, unique=True, editable=False)
     requested_by = models.CharField(max_length=255)
     department = models.CharField(max_length=255)
     purchase_type = models.CharField(
         max_length=20, choices=PURCHASE_TYPE_CHOICES, default="direct_inventory"
     )
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    status = models.CharField(
+        max_length=20, choices=STATUS_CHOICES, default="pending")
     request_date = models.DateField(default=now)
     required_date = models.DateField(null=True, blank=True)
     priority = models.CharField(
@@ -133,7 +141,8 @@ class PurchaseRequisitionItem(models.Model):
     Items in a purchase requisition
     """
 
-    uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    uuid = models.UUIDField(
+        primary_key=True, default=uuid.uuid4, editable=False)
     requisition = models.ForeignKey(
         PurchaseRequisition, on_delete=models.CASCADE, related_name="items"
     )
@@ -152,8 +161,10 @@ class PurchaseRequisitionItem(models.Model):
     item_name = models.CharField(max_length=255)
     quantity = models.DecimalField(max_digits=10, decimal_places=2)
     unit = models.CharField(max_length=50)
-    current_stock = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    required_stock = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    current_stock = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0)
+    required_stock = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0)
     notes = models.TextField(null=True, blank=True)
 
     def __str__(self):
@@ -167,11 +178,13 @@ class PurchaseOrder(Timestamp):
         ("draft", "Draft"),
         ("pending", "Pending"),
         ("approved", "Approved"),
+        ("waiting_for_receive", "Waiting for Receive"),
         ("delivered", "Delivered"),
         ("cancelled", "Cancelled"),
     )
 
-    uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    uuid = models.UUIDField(
+        primary_key=True, default=uuid.uuid4, editable=False)
     po_number = models.CharField(max_length=32, unique=True, editable=False)
 
     requisition = models.ForeignKey(
@@ -191,11 +204,29 @@ class PurchaseOrder(Timestamp):
         blank=True,
         related_name="purchase_orders",
     )
+    warehouse = models.ForeignKey(
+        "company.Warehouse",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="purchase_orders",
+        help_text="Warehouse this PO is for (warehouse-level purchasing)",
+    )
+    companyId = models.ForeignKey(
+        "company.Company",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_index=True,
+        related_name="purchase_orders",
+    )
 
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="draft")
+    status = models.CharField(
+        max_length=25, choices=STATUS_CHOICES, default="pending")
     order_date = models.DateField(default=now)
     expected_delivery_date = models.DateField(null=True, blank=True)
-    total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0)
     notes = models.TextField(null=True, blank=True)
     created_by = models.CharField(max_length=150, null=True, blank=True)
 
@@ -205,7 +236,8 @@ class PurchaseOrder(Timestamp):
 
             date_str = datetime.now().strftime("%Y%m%d")
             last_po = (
-                PurchaseOrder.objects.filter(po_number__startswith=f"PO-{date_str}")
+                PurchaseOrder.objects.filter(
+                    po_number__startswith=f"PO-{date_str}")
                 .order_by("-po_number")
                 .first()
             )
@@ -230,7 +262,8 @@ class PurchaseOrder(Timestamp):
 
 
 class PurchaseOrderItem(models.Model):
-    uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    uuid = models.UUIDField(
+        primary_key=True, default=uuid.uuid4, editable=False)
     purchase_order = models.ForeignKey(
         PurchaseOrder, on_delete=models.CASCADE, related_name="items"
     )
@@ -242,12 +275,29 @@ class PurchaseOrderItem(models.Model):
     product = models.ForeignKey(
         Product, on_delete=models.SET_NULL, null=True, blank=True
     )
+    # Link to a specific product variant (if product has variants)
+    variant = models.ForeignKey(
+        "products.ProductVariant",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="purchase_order_items",
+        help_text="Specific variant of the product, if applicable",
+    )
 
     name = models.CharField(max_length=255)
+    # Variant display info (denormalized for easy display)
+    variant_size = models.CharField(max_length=100, null=True, blank=True)
+    variant_color = models.CharField(max_length=100, null=True, blank=True)
+    variant_unique_code = models.CharField(
+        max_length=32, null=True, blank=True)
+
     quantity = models.DecimalField(max_digits=10, decimal_places=2)
     unit = models.CharField(max_length=50)
-    unit_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    total_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    unit_price = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0)
+    total_price = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0)
     expiry_date = models.DateField(null=True, blank=True)
     warranty_expiry_date = models.DateField(null=True, blank=True)
 
@@ -276,7 +326,8 @@ class QuickPurchase(Timestamp):
         ("cancelled", "Cancelled"),
     )
 
-    uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    uuid = models.UUIDField(
+        primary_key=True, default=uuid.uuid4, editable=False)
 
     # Multi-tenant scoping (optional; may be null for unrestricted users)
     companyId = models.ForeignKey(
@@ -328,7 +379,8 @@ class QuickPurchase(Timestamp):
 
     # Prices
     unit_cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    unit_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    unit_price = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0)
 
     qty_purchased = models.PositiveIntegerField(default=0)
     qty_sold = models.PositiveIntegerField(default=0)

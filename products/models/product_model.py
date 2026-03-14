@@ -95,6 +95,20 @@ class Product(Timestamp):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
+    # ── Warehouse tracking ─────────────────────────────────────────────────────
+    # Location status: where is this product right now?
+    LOCATION_STATUS_CHOICES = (
+        ("warehouse", "In Warehouse"),
+        ("branch", "In Branch"),
+    )
+    # Transaction status: what is the commercial state of the product?
+    TRANSACTION_STATUS_CHOICES = (
+        ("unsold", "Unsold"),
+        ("sold", "Sold"),
+        ("returned", "Returned"),
+        ("rejected", "Rejected / Defective"),
+    )
+
     # Multi-tenant scoping (MegaShop/SaaS)
     companyId = models.ForeignKey(
         "company.Company",
@@ -112,13 +126,64 @@ class Product(Timestamp):
         db_index=True,
         related_name="products",
     )
+    warehouse = models.ForeignKey(
+        "company.Warehouse",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_index=True,
+        related_name="products",
+        help_text="Warehouse this product is currently assigned to",
+    )
+
+    # Unique tracking code (different from product code / SKU).
+    # Used for barcode scanning and individual item tracking.
+    # If product has no variants, this code identifies the product instance.
+    # If product has variants, each variant gets its own unique_code.
+    unique_code = models.CharField(
+        max_length=32,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Auto-generated tracking code for barcode scanning (unique per product, used when no variants)",
+    )
+
+    location_status = models.CharField(
+        max_length=20,
+        choices=LOCATION_STATUS_CHOICES,
+        default="warehouse",
+        db_index=True,
+        help_text="Current location of the product: warehouse or branch",
+    )
+    transaction_status = models.CharField(
+        max_length=20,
+        choices=TRANSACTION_STATUS_CHOICES,
+        default="unsold",
+        db_index=True,
+        help_text="Commercial state: unsold/sold/returned/rejected",
+    )
+
+    # Physical condition of the product
+    CONDITION_CHOICES = (
+        ("good", "Good"),
+        ("defective", "Defective"),
+    )
+    condition = models.CharField(
+        max_length=20,
+        choices=CONDITION_CHOICES,
+        default="good",
+        db_index=True,
+        help_text="Physical condition of the product: good or defective",
+    )
 
     name = models.CharField(max_length=100, null=True, blank=True)
     # NOTE: code is unique per company (not globally) to support multi-tenant catalogs.
-    code = models.CharField(max_length=20, null=True, blank=True, db_index=True)
+    code = models.CharField(max_length=20, null=True,
+                            blank=True, db_index=True)
     model = models.CharField(max_length=100, null=True, blank=True)
     sku = models.CharField(max_length=100, null=True, blank=True)
-    category = models.CharField(max_length=100, default="", null=True, blank=True)
+    category = models.CharField(
+        max_length=100, default="", null=True, blank=True)
 
     # MegaShop catalog helpers (optional; keeps existing APIs stable)
     category_ref = models.ForeignKey(
@@ -212,7 +277,8 @@ class Product(Timestamp):
     # content = RichTextField(blank=False, null=False)
     available = models.IntegerField(default=0)
 
-    unit = models.ForeignKey(Unit, on_delete=models.CASCADE, blank=True, null=True)
+    unit = models.ForeignKey(
+        Unit, on_delete=models.CASCADE, blank=True, null=True)
     # color = models.CharField(max_length=300, default="", blank=True, null=True)
     price = models.FloatField(default=0, blank=True, null=True)
     priceSale = models.FloatField(default=0, blank=True, null=True)
@@ -233,8 +299,10 @@ class Product(Timestamp):
 
     image = models.ImageField(upload_to=upload_to, blank=True, null=True)
     coverUrl = models.ImageField(upload_to=upload_to, blank=True, null=True)
-    barcode = models.ImageField(upload_to=upload_to_barcode, blank=True, null=True)
-    qrcode = models.ImageField(upload_to=upload_to_qrcode, blank=True, null=True)
+    barcode = models.ImageField(
+        upload_to=upload_to_barcode, blank=True, null=True)
+    qrcode = models.ImageField(
+        upload_to=upload_to_qrcode, blank=True, null=True)
 
     quantity = models.IntegerField(default=0)
     out_of_stock = models.BooleanField(default=False)
@@ -395,6 +463,15 @@ class Product(Timestamp):
         # Some code paths call save(update_fields=[...]) for stock/status changes.
         update_fields = kwargs.get("update_fields")
 
+        # Auto-generate unique_code for barcode/tracking (only if not already set)
+        if not self.unique_code:
+            import random as _random
+            import string as _string
+            prefix = (self.name or 'PRD')[:3].upper().replace(' ', '')
+            suffix = ''.join(_random.choices(
+                _string.ascii_uppercase + _string.digits, k=8))
+            self.unique_code = f"{prefix}-{suffix}"
+
         low_threshold = int(self.low_stock_threshold or 20)
         if self.in_stock >= (low_threshold + 1):
             self.status = "in stock"
@@ -448,9 +525,12 @@ class Product(Timestamp):
 
     class Meta:
         indexes = [
-            models.Index(fields=["companyId", "code"], name="idx_product_company_code"),
-            models.Index(fields=["companyId", "name"], name="idx_product_company_name"),
-            models.Index(fields=["companyId", "sku"], name="idx_product_company_sku"),
+            models.Index(fields=["companyId", "code"],
+                         name="idx_product_company_code"),
+            models.Index(fields=["companyId", "name"],
+                         name="idx_product_company_name"),
+            models.Index(fields=["companyId", "sku"],
+                         name="idx_product_company_sku"),
         ]
         constraints = [
             models.UniqueConstraint(
@@ -483,7 +563,8 @@ class Image(models.Model):
     product = models.ForeignKey(
         Product, related_name="images", on_delete=models.CASCADE, null=True
     )
-    picture = models.ImageField(upload_to=upload_to_multi, null=True, blank=True)
+    picture = models.ImageField(
+        upload_to=upload_to_multi, null=True, blank=True)
 
 
 class Tag(models.Model):
@@ -517,6 +598,15 @@ class ProductVariant(models.Model):
         on_delete=models.CASCADE,
         related_name="variants",
         help_text="Parent product this variant belongs to",
+    )
+
+    # Unique tracking code for this specific variant (used for barcode scanning)
+    unique_code = models.CharField(
+        max_length=32,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Auto-generated tracking code for this variant (used for barcode scanning)",
     )
 
     # Variant attributes
@@ -561,6 +651,18 @@ class ProductVariant(models.Model):
         help_text="Cost/purchase price for this variant (optional, uses product supplier_price if not set)",
     )
 
+    # Physical condition of this variant
+    CONDITION_CHOICES = (
+        ("good", "Good"),
+        ("defective", "Defective"),
+    )
+    condition = models.CharField(
+        max_length=20,
+        choices=CONDITION_CHOICES,
+        default="good",
+        help_text="Physical condition of this variant: good or defective",
+    )
+
     # Optional image for variant
     image = models.ImageField(
         upload_to=upload_to,
@@ -583,9 +685,19 @@ class ProductVariant(models.Model):
         ]
 
     def save(self, *args, **kwargs):
-        """Auto-set size_code to product code if not provided"""
+        """Auto-set size_code to product code if not provided; auto-generate unique_code."""
         if not self.size_code and self.product:
             self.size_code = self.product.code
+        if not self.unique_code:
+            import random as _random
+            import string as _string
+            prod_name = (self.product.name if self.product else 'VAR') or 'VAR'
+            prefix = prod_name[:3].upper().replace(' ', '')
+            size_part = (self.size or '')[:2].upper()
+            color_part = (self.color or '')[:2].upper()
+            suffix = ''.join(_random.choices(
+                _string.ascii_uppercase + _string.digits, k=6))
+            self.unique_code = f"V{prefix}{size_part}{color_part}-{suffix}"
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -595,3 +707,145 @@ class ProductVariant(models.Model):
         if self.color:
             parts.append(f"Color: {self.color}")
         return " - ".join(parts)
+
+
+class ProductSerialItem(models.Model):
+    """
+    One row = one physical unit in the warehouse.
+
+    When a variant has size_qty=3, three ProductSerialItem rows are created,
+    each with a unique serial_code. Scanning any serial_code instantly identifies
+    the exact physical unit, its parent product/variant, location, status, and
+    condition — enabling full warehouse audits.
+    """
+
+    STATUS_CHOICES = (
+        ("in_warehouse", "In Warehouse"),
+        ("in_branch", "In Branch"),
+        ("sold", "Sold"),
+        ("returned", "Returned"),
+        ("defective", "Defective"),
+        ("lost", "Lost"),
+        ("transferred", "Transferred"),
+        ("received", "Received"),
+    )
+
+    CONDITION_CHOICES = (
+        ("good", "Good"),
+        ("defective", "Defective"),
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # Parent product — set when product has NO variants
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name="serial_items",
+        null=True,
+        blank=True,
+        help_text="Parent product (set when product has no variants)",
+    )
+    # Parent variant — set when product HAS variants
+    variant = models.ForeignKey(
+        ProductVariant,
+        on_delete=models.CASCADE,
+        related_name="serial_items",
+        null=True,
+        blank=True,
+        help_text="Parent variant (set when product has variants)",
+    )
+
+    # Purchase Order this serial item was originally received against
+    purchase_order = models.ForeignKey(
+        "purchase.PurchaseOrder",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="serial_items",
+        help_text="PO this serial item was received against (set on goods receipt)",
+    )
+
+    # Globally-unique scannable barcode for this physical unit
+    serial_code = models.CharField(
+        max_length=64,
+        unique=True,
+        db_index=True,
+        help_text="Globally unique barcode for this physical unit (auto-generated)",
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default="in_warehouse",
+        db_index=True,
+        help_text="Current location/status of this physical unit",
+    )
+    condition = models.CharField(
+        max_length=20,
+        choices=CONDITION_CHOICES,
+        default="good",
+        help_text="Physical condition of this unit: good or defective",
+    )
+
+    # Current location of this physical unit
+    warehouse = models.ForeignKey(
+        "company.Warehouse",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="serial_items",
+        help_text="Warehouse where this unit currently resides",
+    )
+    branch = models.ForeignKey(
+        "company.Branch",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="serial_items",
+        help_text="Branch where this unit resides after transfer from warehouse",
+    )
+
+    notes = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Optional notes (e.g. damage remarks, audit notes)",
+    )
+    last_scanned_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp of the last barcode scan for this unit",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["created_at"]
+        indexes = [
+            models.Index(fields=["product", "status"],
+                         name="idx_serial_product_status"),
+            models.Index(fields=["variant", "status"],
+                         name="idx_serial_variant_status"),
+            models.Index(fields=["warehouse", "status"],
+                         name="idx_serial_wh_status"),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self.serial_code:
+            import random as _random
+            import string as _string
+            # Build prefix from variant code or product code
+            if self.variant and self.variant.unique_code:
+                base = self.variant.unique_code
+            elif self.product and self.product.unique_code:
+                base = self.product.unique_code
+            else:
+                base = "SER"
+            suffix = ''.join(_random.choices(
+                _string.digits + _string.ascii_uppercase, k=6))
+            self.serial_code = f"{base}-{suffix}"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.serial_code

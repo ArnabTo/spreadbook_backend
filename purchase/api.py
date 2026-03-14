@@ -187,7 +187,8 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        items = requisition.items.select_related("product", "inventory_item").all()
+        items = requisition.items.select_related(
+            "product", "inventory_item").all()
         if not items:
             return Response(
                 {"detail": "Requisition has no items."},
@@ -309,11 +310,54 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
                     _receive_purchase_order_in_atomic(po, actor=actor)
                 except Exception as exc:
                     return Response(
-                        {"detail": str(exc) or "Failed to receive purchase order."},
+                        {"detail": str(
+                            exc) or "Failed to receive purchase order."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
         serializer = self.get_serializer(requisition)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="approve")
+    def approve(self, request, *args, **kwargs):
+        """Approve a pending purchase order."""
+        po: PurchaseOrder = self.get_object()
+        if po.status != "pending":
+            return Response(
+                {"detail": f"Only pending POs can be approved. Current status: {po.status}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        po.status = "approved"
+        po.save(update_fields=["status", "updated_at"])
+        serializer = self.get_serializer(po)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="mark-waiting")
+    def mark_waiting_for_receive(self, request, *args, **kwargs):
+        """Move an approved PO to 'Waiting for Receive' state."""
+        po: PurchaseOrder = self.get_object()
+        if po.status != "approved":
+            return Response(
+                {"detail": f"Only approved POs can be marked as waiting for receive. Current status: {po.status}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        po.status = "waiting_for_receive"
+        po.save(update_fields=["status", "updated_at"])
+        serializer = self.get_serializer(po)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="cancel")
+    def cancel(self, request, *args, **kwargs):
+        """Cancel a purchase order."""
+        po: PurchaseOrder = self.get_object()
+        if po.status == "delivered":
+            return Response(
+                {"detail": "Delivered purchase orders cannot be cancelled."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        po.status = "cancelled"
+        po.save(update_fields=["status", "updated_at"])
+        serializer = self.get_serializer(po)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
@@ -405,7 +449,8 @@ class QuickPurchaseViewSet(viewsets.ModelViewSet):
                     else None
                 ),
                 sku=(
-                    str(sku).strip() if sku is not None and str(sku).strip() else None
+                    str(sku).strip() if sku is not None and str(
+                        sku).strip() else None
                 ),
                 price=float(qp.unit_price or 0),
                 in_stock=remaining,
@@ -437,8 +482,9 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = (
-            PurchaseOrder.objects.select_related("supplier", "requisition", "branch")
-            .prefetch_related("items")
+            PurchaseOrder.objects.select_related(
+                "supplier", "requisition", "branch", "warehouse", "companyId")
+            .prefetch_related("items__product", "items__variant", "items__inventory_item")
             .all()
             .order_by("-created_at")
         )
@@ -455,11 +501,27 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         if branch_id:
             qs = qs.filter(branch_id=branch_id)
 
+        warehouse_id = self.request.query_params.get(
+            "warehouse"
+        ) or self.request.query_params.get("warehouse_id")
+        if warehouse_id:
+            qs = qs.filter(warehouse_id=warehouse_id)
+
+        company_id = self.request.query_params.get(
+            "company"
+        ) or self.request.query_params.get("company_id") or self.request.query_params.get("companyId")
+        if company_id:
+            qs = qs.filter(companyId_id=company_id)
+
+        po_status = self.request.query_params.get("status")
+        if po_status:
+            qs = qs.filter(status=po_status)
+
         user = getattr(self.request, "user", None)
         if user and user.is_authenticated:
             is_unrestricted = (
                 bool(getattr(user, "is_superuser", False))
-                or getattr(user, "role", None) == "software_owner"
+                or getattr(user, "role", None) in ("software_owner", "super_admin", "admin")
             )
             if not is_unrestricted:
                 allowed_branch_ids = set()
@@ -472,10 +534,11 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                     if branch_id and str(branch_id) not in {
                         str(bid) for bid in allowed_branch_ids
                     }:
-                        raise PermissionDenied("You do not have access to this branch")
+                        raise PermissionDenied(
+                            "You do not have access to this branch")
                     qs = qs.filter(branch_id__in=allowed_branch_ids)
                 elif getattr(user, "companyId_id", None):
-                    qs = qs.filter(branch__company_id=user.companyId_id)
+                    qs = qs.filter(companyId_id=user.companyId_id)
                 else:
                     qs = qs.none()
 
@@ -483,19 +546,22 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         created_by = None
-        branch_id = self.request.data.get("branch") or self.request.data.get(
-            "branch_id"
-        )
+        branch_id = self.request.data.get(
+            "branch") or self.request.data.get("branch_id")
+        warehouse_id = self.request.data.get(
+            "warehouse") or self.request.data.get("warehouse_id")
+        company_id = self.request.data.get(
+            "companyId") or self.request.data.get("company_id")
 
         if self.request.user and self.request.user.is_authenticated:
             is_unrestricted = (
                 bool(getattr(self.request.user, "is_superuser", False))
-                or getattr(self.request.user, "role", None) == "software_owner"
+                or getattr(self.request.user, "role", None) in ("software_owner", "super_admin", "admin")
             )
             created_by = getattr(self.request.user, "username", None) or str(
                 self.request.user
             )
-            if not branch_id and hasattr(self.request.user, "branchAccess"):
+            if not branch_id and not warehouse_id and hasattr(self.request.user, "branchAccess"):
                 default_branch = self.request.user.branchAccess.first()
                 if default_branch:
                     branch_id = default_branch.id
@@ -511,9 +577,22 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                 if allowed_branch_ids and str(branch_id) not in {
                     str(bid) for bid in allowed_branch_ids
                 }:
-                    raise PermissionDenied("You do not have access to this branch")
+                    raise PermissionDenied(
+                        "You do not have access to this branch")
 
-        serializer.save(created_by=created_by, branch_id=branch_id)
+            # Auto-assign company from user if not provided
+            if not company_id and getattr(self.request.user, "companyId_id", None):
+                company_id = self.request.user.companyId_id
+
+        save_kwargs = {"created_by": created_by}
+        if branch_id:
+            save_kwargs["branch_id"] = branch_id
+        if warehouse_id:
+            save_kwargs["warehouse_id"] = warehouse_id
+        if company_id:
+            save_kwargs["companyId_id"] = company_id
+
+        serializer.save(**save_kwargs)
 
     def update(self, request, *args, **kwargs):
         po: PurchaseOrder = self.get_object()
@@ -534,6 +613,34 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return super().destroy(request, *args, **kwargs)
+
+    @action(detail=True, methods=["post"], url_path="approve")
+    def approve(self, request, *args, **kwargs):
+        """Approve a pending purchase order."""
+        po: PurchaseOrder = self.get_object()
+        if po.status != "pending":
+            return Response(
+                {"detail": f"Only pending POs can be approved. Current status: {po.status}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        po.status = "approved"
+        po.save(update_fields=["status", "updated_at"])
+        serializer = self.get_serializer(po)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="mark-waiting")
+    def mark_waiting_for_receive(self, request, *args, **kwargs):
+        """Move an approved PO to waiting_for_receive state."""
+        po: PurchaseOrder = self.get_object()
+        if po.status != "approved":
+            return Response(
+                {"detail": f"Only approved POs can be marked as waiting for receive. Current status: {po.status}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        po.status = "waiting_for_receive"
+        po.save(update_fields=["status", "updated_at"])
+        serializer = self.get_serializer(po)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"], url_path="receive")
     def receive(self, request, *args, **kwargs):
@@ -567,9 +674,192 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                 _receive_purchase_order_in_atomic(po, actor=actor)
             except Exception as exc:
                 return Response(
-                    {"detail": str(exc) or "Failed to receive purchase order."},
+                    {"detail": str(
+                        exc) or "Failed to receive purchase order."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
         serializer = self.get_serializer(po)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+    # ── Goods Receipt / Barcode Scan endpoints ─────────────────────────────────
+
+    @action(detail=True, methods=["get"], url_path="serial-items")
+    def serial_items(self, request, *args, **kwargs):
+        """Return pending and received serial items for this PO.
+
+        First tries the direct FK (purchase_order=po). Falls back to matching
+        by the products/variants listed in PO items (for legacy/unlinked items).
+        """
+        from products.models.product_model import ProductSerialItem
+        from products.serializers import ProductSerialItemSerializer
+        from django.db.models import Q
+
+        po = self.get_object()
+
+        # Primary: items directly linked via FK
+        qs = ProductSerialItem.objects.select_related(
+            "product", "variant", "warehouse", "branch"
+        ).filter(purchase_order=po)
+
+        # Fallback: match by products/variants in PO items
+        if not qs.exists():
+            product_ids = list(
+                po.items.exclude(product__isnull=True)
+                .values_list("product_id", flat=True)
+            )
+            variant_ids = list(
+                po.items.exclude(variant__isnull=True)
+                .values_list("variant_id", flat=True)
+            )
+            if product_ids or variant_ids:
+                qs = ProductSerialItem.objects.select_related(
+                    "product", "variant", "warehouse", "branch"
+                ).filter(
+                    Q(product_id__in=product_ids) | Q(
+                        variant_id__in=variant_ids)
+                )
+
+        pending = qs.exclude(status="received")
+        received = qs.filter(status="received")
+        total = qs.count()
+        received_count = received.count()
+
+        return Response({
+            "pending": ProductSerialItemSerializer(pending, many=True).data,
+            "received": ProductSerialItemSerializer(received, many=True).data,
+            "total": total,
+            "received_count": received_count,
+            "all_received": total > 0 and received_count == total,
+        })
+
+    @action(detail=True, methods=["post"], url_path="scan-item")
+    def scan_item(self, request, *args, **kwargs):
+        """Scan a serial code to mark one item as received.
+
+        Optimized: single item lookup + bulk check done in one queryset count.
+        Returns updated counts and whether the PO is now complete.
+        """
+        from products.models.product_model import ProductSerialItem
+        from products.serializers import ProductSerialItemSerializer
+        from django.db.models import Q
+
+        po = self.get_object()
+        if po.status != "waiting_for_receive":
+            return Response(
+                {"detail": "PO must be in 'waiting for receive' status to scan items."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serial_code = (request.data.get("serial_code") or "").strip()
+        if not serial_code:
+            return Response(
+                {"detail": "serial_code is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            item = ProductSerialItem.objects.select_related(
+                "product", "variant"
+            ).get(serial_code=serial_code)
+        except ProductSerialItem.DoesNotExist:
+            return Response(
+                {"detail": f"No item found with serial code '{serial_code}'."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if item.status == "received":
+            return Response(
+                {"detail": "This item has already been received.",
+                    "already_received": True},
+                status=status.HTTP_200_OK,
+            )
+
+        # Verify item belongs to this PO — direct FK or product/variant match
+        product_ids = set(
+            po.items.exclude(product__isnull=True).values_list(
+                "product_id", flat=True)
+        )
+        variant_ids = set(
+            po.items.exclude(variant__isnull=True).values_list(
+                "variant_id", flat=True)
+        )
+        belongs = (
+            item.purchase_order_id == po.uuid
+            or item.product_id in product_ids
+            or item.variant_id in variant_ids
+        )
+        if not belongs:
+            return Response(
+                {"detail": "This item does not belong to this purchase order."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Mark received and link to this PO
+        item.status = "received"
+        item.purchase_order = po
+        item.save(update_fields=["status", "purchase_order", "updated_at"])
+
+        # Check completion: count all items covering this PO's products/variants
+        scope_qs = ProductSerialItem.objects.filter(
+            Q(purchase_order=po)
+            | Q(product_id__in=product_ids)
+            | Q(variant_id__in=variant_ids)
+        ).distinct()
+        total = scope_qs.count()
+        pending_count = scope_qs.exclude(status="received").count()
+        po_completed = total > 0 and pending_count == 0
+
+        if po_completed:
+            po.status = "delivered"
+            po.save(update_fields=["status", "updated_at"])
+
+        return Response({
+            "serial_item": ProductSerialItemSerializer(item).data,
+            "pending_count": pending_count,
+            "received_count": total - pending_count,
+            "total": total,
+            "po_completed": po_completed,
+        })
+
+    @action(detail=True, methods=["post"], url_path="receive-all")
+    def receive_all(self, request, *args, **kwargs):
+        """Mark ALL pending serial items for this PO as received at once."""
+        from products.models.product_model import ProductSerialItem
+        from django.db.models import Q
+
+        po = self.get_object()
+        if po.status != "waiting_for_receive":
+            return Response(
+                {"detail": "PO must be in 'waiting for receive' status."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        product_ids = set(
+            po.items.exclude(product__isnull=True).values_list(
+                "product_id", flat=True)
+        )
+        variant_ids = set(
+            po.items.exclude(variant__isnull=True).values_list(
+                "variant_id", flat=True)
+        )
+
+        scope_qs = ProductSerialItem.objects.filter(
+            Q(purchase_order=po)
+            | Q(product_id__in=product_ids)
+            | Q(variant_id__in=variant_ids)
+        ).distinct()
+
+        pending = scope_qs.exclude(status="received")
+        updated_count = pending.update(
+            status="received",
+            purchase_order=po,
+        )
+
+        po.status = "delivered"
+        po.save(update_fields=["status", "updated_at"])
+
+        return Response({
+            "updated_count": updated_count,
+            "po_completed": True,
+        })

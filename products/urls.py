@@ -15,6 +15,7 @@ from .api import (
     BrandViewSet,
     ProductBarcodeViewSet,
     ProductBatchViewSet,
+    ProductSerialItemViewSet,
 )
 from .api import ColorViewSet, SizeViewSet
 from .inventory_api import (
@@ -40,9 +41,11 @@ router.register("api/product/size", SizeViewSet, "size")
 
 # MegaShop catalog helpers
 router.register("api/product/types", ProductTypeViewSet, "product-types")
-router.register("api/product/generic-names", GenericNameViewSet, "generic-names")
+router.register("api/product/generic-names",
+                GenericNameViewSet, "generic-names")
 router.register("api/product/brands", BrandViewSet, "brands")
-router.register("api/product/barcodes", ProductBarcodeViewSet, "product-barcodes")
+router.register("api/product/barcodes",
+                ProductBarcodeViewSet, "product-barcodes")
 router.register("api/product/batches", ProductBatchViewSet, "product-batches")
 
 # Inventory Management APIs
@@ -50,7 +53,10 @@ router.register("api/inventory/items", InventoryItemViewSet, "inventory-items")
 router.register(
     "api/inventory/categories", InventoryCategoryViewSet, "inventory-categories"
 )
-router.register("api/inventory/movements", StockMovementViewSet, "stock-movements")
+router.register("api/inventory/movements",
+                StockMovementViewSet, "stock-movements")
+router.register("api/product/serial-items",
+                ProductSerialItemViewSet, "serial-items")
 
 
 urlpatterns = router.urls

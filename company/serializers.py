@@ -1,7 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework import serializers
-from .models import Company, Branch, CompanyCustomization
+from .models import Company, Branch, CompanyCustomization, Warehouse
 
 User = get_user_model()
 
@@ -24,6 +24,70 @@ class CompanyCustomizationSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at", "updated_at"]
 
 
+class WarehouseSerializer(serializers.ModelSerializer):
+    """Serializer for Warehouse model matching frontend structure"""
+
+    companyId = serializers.ReadOnlyField()
+    branch_count = serializers.ReadOnlyField()
+    manager = serializers.CharField(
+        source="manager_name", required=False, allow_blank=True, allow_null=True
+    )
+    phone = serializers.CharField(
+        source="phoneNumber", required=False, allow_blank=True, allow_null=True
+    )
+    location = serializers.CharField(
+        source="fullAddress", required=False, allow_blank=True, allow_null=True
+    )
+    parentWarehouseId = serializers.PrimaryKeyRelatedField(
+        source="parent_warehouse",
+        queryset=Warehouse.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+
+    class Meta:
+        model = Warehouse
+        fields = [
+            "id",
+            "companyId",
+            "company",
+            "parentWarehouseId",
+            "name",
+            "code",
+            "location",
+            "phone",
+            "phoneNumber",
+            "email",
+            "fullAddress",
+            "city",
+            "state",
+            "country",
+            "postal_code",
+            "manager",
+            "manager_name",
+            "capacity",
+            "warehouseType",
+            "status",
+            "is_active",
+            "branch_count",
+            "postedAt",
+            "updateAt",
+        ]
+        read_only_fields = ["id", "code", "companyId",
+                            "branch_count", "postedAt", "updateAt"]
+
+    def to_representation(self, instance):
+        representation = super().to_representation(instance)
+        representation["id"] = str(representation["id"])
+        if not representation.get("location") and representation.get("fullAddress"):
+            representation["location"] = representation["fullAddress"]
+        if not representation.get("manager") and representation.get("manager_name"):
+            representation["manager"] = representation["manager_name"]
+        if not representation.get("manager"):
+            representation["manager"] = "No manager assigned"
+        return representation
+
+
 class BranchSerializer(serializers.ModelSerializer):
     """Serializer for restaurant branches matching frontend structure"""
 
@@ -35,13 +99,21 @@ class BranchSerializer(serializers.ModelSerializer):
     phone = serializers.CharField(required=False, allow_blank=True)
     location = serializers.CharField(required=False, allow_blank=True)
     openingHours = serializers.CharField(required=False, allow_blank=True)
-    todaySales = serializers.DecimalField(max_digits=10, decimal_places=2, default=0.00)
-    monthSales = serializers.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    todaySales = serializers.DecimalField(
+        max_digits=10, decimal_places=2, default=0.00)
+    monthSales = serializers.DecimalField(
+        max_digits=10, decimal_places=2, default=0.00)
     activeOrders = serializers.IntegerField(default=0)
     activeTables = serializers.IntegerField(default=0)
     staff = serializers.IntegerField(default=0)
     status = serializers.ChoiceField(
         choices=[("active", "Active"), ("inactive", "Inactive")], default="active"
+    )
+    warehouseId = serializers.PrimaryKeyRelatedField(
+        source="warehouse",
+        queryset=Warehouse.objects.all(),
+        required=False,
+        allow_null=True,
     )
 
     class Meta:
@@ -61,6 +133,8 @@ class BranchSerializer(serializers.ModelSerializer):
             "activeOrders",
             "activeTables",
             "staff",
+            # Warehouse link
+            "warehouseId",
             # Additional backend fields
             "code",
             "company",
@@ -100,8 +174,10 @@ class BranchSerializer(serializers.ModelSerializer):
         representation = super().to_representation(instance)
 
         # Ensure numeric fields are properly formatted
-        representation["todaySales"] = float(representation.get("todaySales", 0))
-        representation["monthSales"] = float(representation.get("monthSales", 0))
+        representation["todaySales"] = float(
+            representation.get("todaySales", 0))
+        representation["monthSales"] = float(
+            representation.get("monthSales", 0))
 
         # Ensure string ID for frontend compatibility
         representation["id"] = str(representation["id"])

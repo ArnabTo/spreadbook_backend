@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
-from products.models.product_model import Product
+from products.models.product_model import Product, ProductVariant, ProductSerialItem
 from django.db import transaction
 
 from purchase.models import PurchaseOrder, PurchaseOrderItem
@@ -85,7 +85,8 @@ def create_purchase_order_from_product(sender, instance: Product, created, **kwa
     """
 
     current_supplier_id = getattr(instance, "supplier_id", None)
-    current_supplier_price = _safe_decimal(getattr(instance, "supplier_price", 0))
+    current_supplier_price = _safe_decimal(
+        getattr(instance, "supplier_price", 0))
     prev_supplier_id = getattr(instance, "_prev_supplier_id_for_po", None)
     prev_supplier_price = _safe_decimal(
         getattr(instance, "_prev_supplier_price_for_po", None)
@@ -103,7 +104,8 @@ def create_purchase_order_from_product(sender, instance: Product, created, **kwa
         with transaction.atomic():
             # Check if product already has a PO (for update case)
             existing_po = (
-                PurchaseOrder.objects.filter(notes__contains=f"Product {instance.id}")
+                PurchaseOrder.objects.filter(
+                    notes__contains=f"Product {instance.id}")
                 .order_by("-created_at")
                 .first()
             )
@@ -112,12 +114,20 @@ def create_purchase_order_from_product(sender, instance: Product, created, **kwa
                 # Update existing PO with new supplier
                 existing_po.supplier_id = current_supplier_id
                 existing_po.branch_id = getattr(instance, "branch_id", None)
+                existing_po.warehouse_id = getattr(
+                    instance, "warehouse_id", None)
+                existing_po.companyId_id = getattr(
+                    instance, "companyId_id", None)
                 po = existing_po
                 # Delete old items to recreate
                 existing_po.items.all().delete()
             elif existing_po and not created and price_changed:
                 # Update existing PO with new price
                 existing_po.branch_id = getattr(instance, "branch_id", None)
+                existing_po.warehouse_id = getattr(
+                    instance, "warehouse_id", None)
+                existing_po.companyId_id = getattr(
+                    instance, "companyId_id", None)
                 po = existing_po
                 # Delete old items to recreate
                 existing_po.items.all().delete()
@@ -126,7 +136,9 @@ def create_purchase_order_from_product(sender, instance: Product, created, **kwa
                 po = PurchaseOrder.objects.create(
                     supplier_id=current_supplier_id,
                     branch_id=getattr(instance, "branch_id", None),
-                    status="delivered",
+                    warehouse_id=getattr(instance, "warehouse_id", None),
+                    companyId_id=getattr(instance, "companyId_id", None),
+                    status="pending",
                     notes=f"Auto-created from Product {instance.name or instance.id}",
                     created_by="system:product-signal",
                 )
@@ -143,7 +155,8 @@ def create_purchase_order_from_product(sender, instance: Product, created, **kwa
                     if getattr(variant, "color", None):
                         variant_desc_parts.append(f"color={variant.color}")
                     if getattr(variant, "size_name", None):
-                        variant_desc_parts.append(f"size_name={variant.size_name}")
+                        variant_desc_parts.append(
+                            f"size_name={variant.size_name}")
                     if getattr(variant, "size_code", None):
                         variant_desc_parts.append(f"code={variant.size_code}")
 
@@ -163,6 +176,11 @@ def create_purchase_order_from_product(sender, instance: Product, created, **kwa
                     PurchaseOrderItem.objects.create(
                         purchase_order=po,
                         product=instance,
+                        variant=variant,
+                        variant_size=getattr(variant, "size", None) or None,
+                        variant_color=getattr(variant, "color", None) or None,
+                        variant_unique_code=getattr(
+                            variant, "unique_code", None) or None,
                         name=f"{instance.name or 'Product'}{variant_suffix}",
                         quantity=quantity,
                         unit=str(getattr(instance, "unit", None) or "unit"),
@@ -188,7 +206,76 @@ def create_purchase_order_from_product(sender, instance: Product, created, **kwa
             # Set the calculated total amount
             po.total_amount = total_amount
             po.save(
-                update_fields=["total_amount", "updated_at", "supplier_id", "branch_id"]
+                update_fields=["total_amount", "updated_at",
+                               "supplier_id", "branch_id", "warehouse_id", "companyId_id"]
             )
 
     transaction.on_commit(_process_po)
+
+
+@receiver(post_save, sender=ProductVariant)
+def auto_generate_serial_items(sender, instance: ProductVariant, created, **kwargs):
+    """
+    Auto-create ProductSerialItem rows when a variant is saved.
+
+    - On create: create size_qty serial items.
+    - On update: if size_qty increased, create only the additional items.
+      If decreased, existing physical units are not deleted (they exist in the real world).
+    """
+    qty = int(instance.size_qty or 0)
+    if qty <= 0:
+        return
+
+    existing_count = ProductSerialItem.objects.filter(variant=instance).count()
+
+    to_create = qty - existing_count
+    if to_create <= 0:
+        return  # qty unchanged or reduced — nothing to create
+
+    warehouse_id = getattr(instance.product, "warehouse_id", None)
+
+    def _create_serials():
+        import random as _random
+        import string as _string
+        # Mirror ProductSerialItem.save() prefix logic for pre-generating codes
+        if instance.unique_code:
+            base = instance.unique_code
+        elif instance.product and instance.product.unique_code:
+            base = instance.product.unique_code
+        else:
+            base = "SER"
+        # Load existing codes with this prefix to avoid collisions
+        used_codes = set(
+            ProductSerialItem.objects.filter(
+                serial_code__startswith=base + "-"
+            ).values_list("serial_code", flat=True)
+        )
+        # Find the most recent PO created for this product (auto-created by signal)
+        po_id = (
+            PurchaseOrder.objects.filter(
+                notes__contains=f"Product {instance.product.id}"
+            )
+            .order_by("-created_at")
+            .values_list("uuid", flat=True)
+            .first()
+        )
+        items = []
+        for _ in range(to_create):
+            while True:
+                suffix = ''.join(_random.choices(
+                    _string.digits + _string.ascii_uppercase, k=6))
+                code = f"{base}-{suffix}"
+                if code not in used_codes:
+                    used_codes.add(code)
+                    break
+            items.append(ProductSerialItem(
+                product=instance.product,
+                variant=instance,
+                warehouse_id=warehouse_id,
+                status="in_warehouse",
+                serial_code=code,
+                purchase_order_id=po_id,
+            ))
+        ProductSerialItem.objects.bulk_create(items, batch_size=500)
+
+    transaction.on_commit(_create_serials)

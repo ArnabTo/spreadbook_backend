@@ -3,12 +3,13 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.db import models
 from django.utils import timezone
-from .models import Company, Branch, CompanyCustomization
+from .models import Company, Branch, CompanyCustomization, Warehouse
 from .serializers import (
     CompanySerializer,
     CompanyListSerializer,
     BranchSerializer,
     CompanyCustomizationSerializer,
+    WarehouseSerializer,
 )
 from rest_framework import serializers, viewsets, permissions, filters
 from rest_framework import generics
@@ -125,12 +126,14 @@ class CompanyViewSet(viewsets.ModelViewSet):
         )
 
         # Filter by subscription status
-        subscription_status = self.request.query_params.get("subscription_status", None)
+        subscription_status = self.request.query_params.get(
+            "subscription_status", None)
         if subscription_status:
             queryset = queryset.filter(subscriptionStatus=subscription_status)
 
         # Filter by approval status
-        approval_status = self.request.query_params.get("approval_status", None)
+        approval_status = self.request.query_params.get(
+            "approval_status", None)
         if approval_status:
             queryset = queryset.filter(approvalStatus=approval_status)
 
@@ -287,10 +290,14 @@ class CompanyViewSet(viewsets.ModelViewSet):
         payment_details = request.data
 
         company.initialPaymentStatus = "verified"
-        company.initialPaymentDate = payment_details.get("payment_date", timezone.now())
-        company.initialPaymentMethod = payment_details.get("payment_method", "")
-        company.initialPaymentTransactionId = payment_details.get("transaction_id", "")
-        company.lastPaymentDate = payment_details.get("payment_date", timezone.now())
+        company.initialPaymentDate = payment_details.get(
+            "payment_date", timezone.now())
+        company.initialPaymentMethod = payment_details.get(
+            "payment_method", "")
+        company.initialPaymentTransactionId = payment_details.get(
+            "transaction_id", "")
+        company.lastPaymentDate = payment_details.get(
+            "payment_date", timezone.now())
 
         # Update subscription status if company is approved
         if company.approvalStatus == "approved":
@@ -314,14 +321,16 @@ class CompanyViewSet(viewsets.ModelViewSet):
         # Parse optional date
         if payment_date:
             try:
-                now_dt = timezone.make_aware(datetime.fromisoformat(payment_date))
+                now_dt = timezone.make_aware(
+                    datetime.fromisoformat(payment_date))
             except Exception:
                 now_dt = timezone.now()
 
         company.lastPaymentDate = now_dt
         company.daysOverdue = 0
         company.subscriptionStatus = "active"
-        company.nextBillingDate = _next_billing_date(now_dt, company.paymentType)
+        company.nextBillingDate = _next_billing_date(
+            now_dt, company.paymentType)
         company.save(
             update_fields=[
                 "lastPaymentDate",
@@ -399,15 +408,18 @@ class CompanyViewSet(viewsets.ModelViewSet):
     def stats(self, request):
         """Get company statistics"""
         total_companies = Company.objects.count()
-        active_companies = Company.objects.filter(subscriptionStatus="active").count()
-        pending_approval = Company.objects.filter(approvalStatus="pending").count()
+        active_companies = Company.objects.filter(
+            subscriptionStatus="active").count()
+        pending_approval = Company.objects.filter(
+            approvalStatus="pending").count()
         overdue_payments = Company.objects.filter(
             subscriptionStatus="payment_overdue"
         ).count()
 
         # Revenue statistics
         total_revenue = (
-            Company.objects.aggregate(total=models.Sum("subscriptionPrice"))["total"]
+            Company.objects.aggregate(
+                total=models.Sum("subscriptionPrice"))["total"]
             or 0
         )
 
@@ -490,7 +502,8 @@ class BranchViewSet(viewsets.ModelViewSet):
                         branch_access.all().values_list("id", flat=True)
                     )
                     if accessible_branch_ids:
-                        queryset = queryset.filter(id__in=accessible_branch_ids)
+                        queryset = queryset.filter(
+                            id__in=accessible_branch_ids)
 
         # Filter by company if specified
         company_id = self.request.query_params.get("company", None)
@@ -558,7 +571,8 @@ class BranchViewSet(viewsets.ModelViewSet):
         """Get branches grouped by company"""
         company_id = request.query_params.get("company_id")
         if company_id:
-            branches = Branch.objects.filter(company_id=company_id, is_active=True)
+            branches = Branch.objects.filter(
+                company_id=company_id, is_active=True)
         else:
             branches = Branch.objects.filter(is_active=True)
 
@@ -576,7 +590,8 @@ class BranchViewSet(viewsets.ModelViewSet):
             Branch.objects.values("company__name")
             .annotate(
                 branch_count=models.Count("id"),
-                active_count=models.Count("id", filter=models.Q(is_active=True)),
+                active_count=models.Count(
+                    "id", filter=models.Q(is_active=True)),
             )
             .order_by("-branch_count")
         )
@@ -596,6 +611,78 @@ class BranchViewSet(viewsets.ModelViewSet):
         }
 
         return Response(stats_data)
+
+
+class WarehouseViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing warehouses (company => warehouse => branch)
+    """
+
+    serializer_class = WarehouseSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = StandardResultsSetPagination
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ["name", "fullAddress", "city", "code"]
+    ordering_fields = ["name", "postedAt", "updateAt"]
+    ordering = ["-postedAt"]
+
+    def get_queryset(self):
+        user = self.request.user
+        role = _role(user)
+        queryset = Warehouse.objects.select_related(
+            "company", "manager", "parent_warehouse")
+
+        if role != "software_owner":
+            if role == "reseller" and getattr(user, "resellerId", None):
+                queryset = queryset.filter(company__resellerId=user.resellerId)
+            else:
+                company_pk = _user_company_pk(user)
+                if company_pk:
+                    queryset = queryset.filter(company_id=company_pk)
+                else:
+                    queryset = queryset.none()
+
+        # Filter by company
+        company_id = self.request.query_params.get("company", None)
+        if company_id is not None:
+            queryset = queryset.filter(company_id=company_id)
+
+        # Filter by active status
+        is_active = self.request.query_params.get("active", None)
+        if is_active is not None:
+            queryset = queryset.filter(is_active=is_active.lower() == "true")
+
+        # Filter by parent warehouse
+        parent_id = self.request.query_params.get("parent_warehouse", None)
+        if parent_id is not None:
+            queryset = queryset.filter(parent_warehouse_id=parent_id)
+
+        return queryset
+
+    @action(detail=True, methods=["get"])
+    def branches(self, request, pk=None):
+        """Get all branches connected to this warehouse"""
+        warehouse = self.get_object()
+        branches = warehouse.warehouse_branches.filter(is_active=True)
+        serializer = BranchSerializer(branches, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["get"])
+    def children(self, request, pk=None):
+        """Get child warehouses"""
+        warehouse = self.get_object()
+        children = warehouse.child_warehouses.filter(is_active=True)
+        serializer = self.get_serializer(children, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["post"])
+    def toggle_status(self, request, pk=None):
+        """Toggle warehouse active status"""
+        warehouse = self.get_object()
+        warehouse.is_active = not warehouse.is_active
+        warehouse.save()
+        serializer = self.get_serializer(warehouse)
+        return Response(serializer.data)
 
 
 class CompanyCustomizationViewSet(viewsets.ModelViewSet):

@@ -10,6 +10,7 @@ from .models import Category, Product, Unit
 from .models import ProductType, GenericName, Brand, ProductBarcode, ProductBatch
 from .models.product_model import (
     NewLabel,
+    ProductSerialItem,
     SaleLabel,
     Size,
     Image,
@@ -403,6 +404,7 @@ class ProductAdmin(ImportExportModelAdmin):
             {
                 "fields": (
                     "companyId",
+                    "warehouse",
                     "branch",
                     "name",
                     "brand_name",
@@ -634,6 +636,12 @@ class UnitAdmin(ImportExportModelAdmin):
     search_fields = ("value",)
     list_per_page = 10
 
+
+@admin.register(ProductSerialItem)
+class ProductSerialItemAdmin(admin.ModelAdmin):
+    list_display = ("id", "product", "variant", "serial_code","status")
+    list_filter = ("status",)
+    list_per_page = 50
 
 # Inventory Management Admin
 

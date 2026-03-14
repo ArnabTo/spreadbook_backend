@@ -4,6 +4,7 @@ from .api import (
     CompanyViewSet,
     BranchViewSet,
     CompanyCustomizationViewSet,
+    WarehouseViewSet,
 )
 from .api_enhanced import (
     get_companies_with_branches,
@@ -19,6 +20,7 @@ from .api_enhanced import (
 router = routers.DefaultRouter()
 router.register("api/companies", CompanyViewSet, "companies")
 router.register("api/branches", BranchViewSet, "branches")
+router.register("api/warehouses", WarehouseViewSet, "warehouses")
 router.register(
     "api/company-customizations", CompanyCustomizationViewSet, "company-customizations"
 )
@@ -48,7 +50,8 @@ enhanced_urlpatterns = [
         assign_user_to_branches,
         name="assign-user-branches",
     ),
-    path("api/branches/<int:branch_id>/users/", get_branch_users, name="branch-users"),
+    path("api/branches/<int:branch_id>/users/",
+         get_branch_users, name="branch-users"),
     path(
         "api/companies/<int:company_id>/structure/",
         get_company_structure,

@@ -20,9 +20,12 @@ class Company(models.Model):
         null=True,
         blank=True,
     )
-    companyId = models.CharField(max_length=100, default="", blank=True, null=True)
-    fullAddress = models.CharField(max_length=200, default="", blank=True, null=True)
-    description = models.CharField(max_length=300, default="", blank=True, null=True)
+    companyId = models.CharField(
+        max_length=100, default="", blank=True, null=True)
+    fullAddress = models.CharField(
+        max_length=200, default="", blank=True, null=True)
+    description = models.CharField(
+        max_length=300, default="", blank=True, null=True)
     avatarUrl = models.ImageField(upload_to=upload_to, blank=True, null=True)
     url = models.URLField(blank=True, null=True)
     postedAt = models.DateTimeField(default=now, blank=True, null=True)
@@ -219,7 +222,8 @@ class Company(models.Model):
     )
     setupFeeStatus = models.CharField(
         max_length=50,
-        choices=[("pending", "Pending"), ("paid", "Paid"), ("waived", "Waived")],
+        choices=[("pending", "Pending"),
+                 ("paid", "Paid"), ("waived", "Waived")],
         null=True,
         blank=True,
         help_text="Setup fee payment status",
@@ -285,6 +289,14 @@ class Branch(models.Model):
         on_delete=models.CASCADE,
         related_name="company_branches",
         help_text="Company this branch belongs to",
+    )
+    warehouse = models.ForeignKey(
+        "Warehouse",
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="warehouse_branches",
+        help_text="Warehouse this branch belongs to (company => warehouse => branch)",
     )
     name = models.CharField(
         max_length=100, help_text="Branch name (e.g., Downtown Branch, Mall Location)"
@@ -358,7 +370,8 @@ class Branch(models.Model):
     activeTables = models.PositiveIntegerField(
         default=0, help_text="Number of active/occupied tables"
     )
-    staff = models.PositiveIntegerField(default=0, help_text="Number of staff members")
+    staff = models.PositiveIntegerField(
+        default=0, help_text="Number of staff members")
 
     # Status
     status = models.CharField(
@@ -419,7 +432,8 @@ class Branch(models.Model):
         # Auto-generate code if not provided
         if not self.code and self.company:
             company_prefix = (self.company.name or "BR")[:2].upper()
-            branch_count = Branch.objects.filter(company=self.company).count() + 1
+            branch_count = Branch.objects.filter(
+                company=self.company).count() + 1
             self.code = f"{company_prefix}{branch_count:03d}"
 
         # Sync status fields
@@ -439,6 +453,117 @@ class Branch(models.Model):
         # Auto-populate phone from phoneNumber if not provided
         if not self.phone and self.phoneNumber:
             self.phone = self.phoneNumber
+
+        super().save(*args, **kwargs)
+
+
+class Warehouse(models.Model):
+    """Warehouse model for multi-level management: Company => Warehouse => Branch"""
+
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name="company_warehouses",
+        help_text="Company this warehouse belongs to",
+    )
+    parent_warehouse = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="child_warehouses",
+        help_text="Parent warehouse (for warehouse-to-warehouse connections)",
+    )
+
+    name = models.CharField(max_length=100, help_text="Warehouse name")
+    code = models.CharField(
+        max_length=20, unique=True, help_text="Unique warehouse code (e.g., WH001)"
+    )
+
+    # Contact Information
+    phoneNumber = models.CharField(max_length=20, blank=True, null=True)
+    email = models.EmailField(blank=True, null=True)
+
+    # Address Information
+    fullAddress = models.CharField(max_length=200, blank=True, null=True)
+    city = models.CharField(max_length=100, blank=True, null=True)
+    state = models.CharField(max_length=100, blank=True, null=True)
+    country = models.CharField(max_length=100, default="Bangladesh")
+    postal_code = models.CharField(max_length=20, blank=True, null=True)
+
+    # Management
+    manager = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="managed_warehouses",
+        help_text="Warehouse manager",
+    )
+    manager_name = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Manager name (for frontend compatibility)",
+    )
+
+    # Warehouse specifics
+    capacity = models.PositiveIntegerField(
+        default=0, help_text="Total storage capacity (units)"
+    )
+    warehouseType = models.CharField(
+        max_length=50,
+        choices=[
+            ("main", "Main Warehouse"),
+            ("regional", "Regional Warehouse"),
+            ("distribution", "Distribution Center"),
+            ("cold_storage", "Cold Storage"),
+            ("transit", "Transit Warehouse"),
+        ],
+        default="main",
+        help_text="Type of warehouse",
+    )
+
+    # Status
+    is_active = models.BooleanField(default=True)
+    status = models.CharField(
+        max_length=20,
+        choices=[("active", "Active"), ("inactive", "Inactive")],
+        default="active",
+    )
+
+    postedAt = models.DateTimeField(default=now, editable=False)
+    updateAt = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Warehouse"
+        verbose_name_plural = "Warehouses"
+        ordering = ["company", "name"]
+        unique_together = ["company", "code"]
+
+    def __str__(self):
+        return f"{self.company.name} - {self.name}"
+
+    @property
+    def companyId(self):
+        """Get company ID as string for frontend compatibility"""
+        return str(self.company.id) if self.company else None
+
+    @property
+    def branch_count(self):
+        """Get number of branches connected to this warehouse"""
+        return self.warehouse_branches.filter(is_active=True).count()
+
+    def save(self, *args, **kwargs):
+        # Auto-generate code if not provided
+        if not self.code and self.company:
+            company_prefix = (self.company.name or "WH")[:2].upper()
+            wh_count = Warehouse.objects.filter(
+                company=self.company).count() + 1
+            self.code = f"WH{company_prefix}{wh_count:03d}"
+
+        # Sync status fields
+        self.status = "active" if self.is_active else "inactive"
 
         super().save(*args, **kwargs)
 

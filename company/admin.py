@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Company, Branch, CompanyCustomization
+from .models import Company, Branch, CompanyCustomization, Warehouse
 
 
 class BranchInline(admin.TabularInline):
@@ -8,6 +8,15 @@ class BranchInline(admin.TabularInline):
     model = Branch
     extra = 0
     fields = ["name", "code", "phoneNumber", "city", "manager", "is_active"]
+    readonly_fields = ["code"]
+
+
+class WarehouseInline(admin.TabularInline):
+    """Inline admin for managing warehouses within company admin"""
+
+    model = Warehouse
+    extra = 0
+    fields = ["name", "code", "city", "warehouseType", "manager", "is_active"]
     readonly_fields = ["code"]
 
 
@@ -24,7 +33,8 @@ class CompanyCustomizationInline(admin.StackedInline):
 class CompanyAdmin(admin.ModelAdmin):
     """Enhanced admin interface for Company model"""
 
-    list_display = [ "id", "name", "email", "phoneNumber", "branch_count", "postedAt"]
+    list_display = ["id", "name", "email",
+                    "phoneNumber", "branch_count", "postedAt"]
     list_filter = ["postedAt", "updateAt"]
     search_fields = ["name", "email", "phoneNumber"]
     readonly_fields = ["postedAt", "updateAt", "branch_count"]
@@ -57,11 +67,13 @@ class CompanyAdmin(admin.ModelAdmin):
                 )
             },
         ),
-        ("Statistics", {"fields": ("branch_count",), "classes": ("collapse",)}),
-        ("Timestamps", {"fields": ("postedAt", "updateAt"), "classes": ("collapse",)}),
+        ("Statistics", {"fields": ("branch_count",),
+         "classes": ("collapse",)}),
+        ("Timestamps", {"fields": ("postedAt",
+         "updateAt"), "classes": ("collapse",)}),
     )
 
-    inlines = [BranchInline, CompanyCustomizationInline]
+    inlines = [BranchInline, WarehouseInline, CompanyCustomizationInline]
 
 
 @admin.register(Branch)
@@ -73,6 +85,7 @@ class BranchAdmin(admin.ModelAdmin):
         "name",
         "code",
         "company",
+        "warehouse",
         "city",
         "manager",
         "is_active",
@@ -81,10 +94,12 @@ class BranchAdmin(admin.ModelAdmin):
     ]
     list_filter = ["is_active", "company", "city", "postedAt"]
     search_fields = ["name", "code", "phoneNumber", "email"]
-    readonly_fields = ["code", "postedAt", "updateAt", "user_count", "full_address"]
+    readonly_fields = ["code", "postedAt",
+                       "updateAt", "user_count", "full_address"]
 
     fieldsets = (
-        ("Basic Information", {"fields": ("company", "name", "code", "manager")}),
+        ("Basic Information", {
+         "fields": ("company", "warehouse", "name", "code", "manager")}),
         (
             "Contact Information",
             {
@@ -112,7 +127,8 @@ class BranchAdmin(admin.ModelAdmin):
             {"fields": ("seating_capacity", "delivery_radius", "opening_hours")},
         ),
         ("Status & Statistics", {"fields": ("is_active", "user_count")}),
-        ("Timestamps", {"fields": ("postedAt", "updateAt"), "classes": ("collapse",)}),
+        ("Timestamps", {"fields": ("postedAt",
+         "updateAt"), "classes": ("collapse",)}),
     )
 
     def get_company_id(self, obj):
@@ -146,4 +162,46 @@ class CompanyCustomizationAdmin(admin.ModelAdmin):
             "Timestamps",
             {"fields": ("created_at", "updated_at"), "classes": ("collapse",)},
         ),
+    )
+
+
+@admin.register(Warehouse)
+class WarehouseAdmin(admin.ModelAdmin):
+    """Admin interface for Warehouse model"""
+
+    list_display = [
+        "id",
+        "name",
+        "code",
+        "company",
+        "warehouseType",
+        "city",
+        "manager",
+        "is_active",
+        "branch_count",
+        "postedAt",
+    ]
+    list_filter = ["is_active", "company", "warehouseType", "city", "postedAt"]
+    search_fields = ["name", "code", "email"]
+    readonly_fields = ["code", "postedAt",
+                       "updateAt", "branch_count", "companyId"]
+
+    fieldsets = (
+        (
+            "Basic Information",
+            {"fields": ("company", "name", "code", "warehouseType",
+                        "parent_warehouse", "manager", "capacity")},
+        ),
+        (
+            "Contact Information",
+            {"fields": ("phoneNumber", "email")},
+        ),
+        (
+            "Address",
+            {"fields": ("fullAddress", "city", "state",
+                        "country", "postal_code")},
+        ),
+        ("Status", {"fields": ("is_active",)}),
+        ("Timestamps", {"fields": ("postedAt",
+         "updateAt"), "classes": ("collapse",)}),
     )

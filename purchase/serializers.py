@@ -82,7 +82,8 @@ class PurchaseRequisitionSerializer(serializers.ModelSerializer):
         requisition = PurchaseRequisition.objects.create(**validated_data)
 
         for item_data in items_data:
-            PurchaseRequisitionItem.objects.create(requisition=requisition, **item_data)
+            PurchaseRequisitionItem.objects.create(
+                requisition=requisition, **item_data)
 
         return requisition
 
@@ -112,6 +113,10 @@ class PurchaseOrderItemSerializer(serializers.ModelSerializer):
         source="inventory_item.name", read_only=True
     )
     product_name = serializers.CharField(source="product.name", read_only=True)
+    product_code = serializers.CharField(source="product.code", read_only=True)
+    product_unique_code = serializers.CharField(
+        source="product.unique_code", read_only=True)
+    variant_info = serializers.SerializerMethodField()
 
     class Meta:
         model = PurchaseOrderItem
@@ -121,7 +126,14 @@ class PurchaseOrderItemSerializer(serializers.ModelSerializer):
             "inventory_item_name",
             "product",
             "product_name",
+            "product_code",
+            "product_unique_code",
+            "variant",
+            "variant_info",
             "name",
+            "variant_size",
+            "variant_color",
+            "variant_unique_code",
             "quantity",
             "unit",
             "unit_price",
@@ -129,16 +141,37 @@ class PurchaseOrderItemSerializer(serializers.ModelSerializer):
             "expiry_date",
             "warranty_expiry_date",
         ]
-        read_only_fields = ["uuid", "total_price"]
+        read_only_fields = ["uuid", "total_price", "product_name", "product_code",
+                            "product_unique_code", "variant_info"]
+
+    def get_variant_info(self, obj):
+        if obj.variant:
+            return {
+                "id": str(obj.variant.id),
+                "size": obj.variant.size,
+                "color": obj.variant.color,
+                "size_code": obj.variant.size_code,
+                "unique_code": obj.variant.unique_code,
+                "price": obj.variant.price,
+                "supplier_price": obj.variant.supplier_price,
+            }
+        return None
 
 
 class PurchaseOrderSerializer(serializers.ModelSerializer):
     items = PurchaseOrderItemSerializer(many=True)
-    supplier_name = serializers.CharField(source="supplier.name", read_only=True)
+    supplier_name = serializers.CharField(
+        source="supplier.name", read_only=True)
     branch_name = serializers.CharField(source="branch.name", read_only=True)
+    warehouse_name = serializers.CharField(
+        source="warehouse.name", read_only=True)
+    company_name = serializers.CharField(
+        source="companyId.name", read_only=True)
     requisition_number = serializers.CharField(
         source="requisition.pr_number", read_only=True
     )
+    items_count = serializers.SerializerMethodField()
+    total_quantity = serializers.SerializerMethodField()
 
     class Meta:
         model = PurchaseOrder
@@ -149,6 +182,10 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
             "supplier_name",
             "branch",
             "branch_name",
+            "warehouse",
+            "warehouse_name",
+            "companyId",
+            "company_name",
             "requisition",
             "requisition_number",
             "status",
@@ -156,7 +193,10 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
             "expected_delivery_date",
             "total_amount",
             "notes",
+            "created_by",
             "items",
+            "items_count",
+            "total_quantity",
             "created_at",
             "updated_at",
         ]
@@ -166,7 +206,19 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
             "total_amount",
             "created_at",
             "updated_at",
+            "items_count",
+            "total_quantity",
         ]
+
+    def get_items_count(self, obj):
+        return obj.items.count()
+
+    def get_total_quantity(self, obj):
+        from decimal import Decimal
+        total = Decimal("0")
+        for it in obj.items.all():
+            total += it.quantity or Decimal("0")
+        return total
 
     def create(self, validated_data):
         items_data = validated_data.pop("items", [])
@@ -185,7 +237,8 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
         if items_data is not None:
             instance.items.all().delete()
             for item_data in items_data:
-                PurchaseOrderItem.objects.create(purchase_order=instance, **item_data)
+                PurchaseOrderItem.objects.create(
+                    purchase_order=instance, **item_data)
             instance.recalc_total()
 
         return instance
@@ -193,7 +246,8 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
 
 class QuickPurchaseSerializer(serializers.ModelSerializer):
     sale_id = serializers.UUIDField(source="sale.id", read_only=True)
-    invoice_item_id = serializers.IntegerField(source="invoice_item.id", read_only=True)
+    invoice_item_id = serializers.IntegerField(
+        source="invoice_item.id", read_only=True)
     product_id = serializers.UUIDField(source="product.id", read_only=True)
 
     class Meta:
@@ -234,5 +288,7 @@ class QuickPurchaseConvertSerializer(serializers.Serializer):
 
     name = serializers.CharField(required=False, allow_blank=True)
     category = serializers.CharField(required=False, allow_blank=True)
-    code = serializers.CharField(required=False, allow_blank=True, allow_null=True)
-    sku = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    code = serializers.CharField(
+        required=False, allow_blank=True, allow_null=True)
+    sku = serializers.CharField(
+        required=False, allow_blank=True, allow_null=True)

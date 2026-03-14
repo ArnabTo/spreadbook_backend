@@ -8,9 +8,10 @@ from django.utils.dateparse import parse_datetime, parse_date
 from django.utils.timezone import get_default_timezone, is_naive, make_aware
 from datetime import datetime, time
 from django.db.models import Q, Prefetch
+from django.db import transaction
 
 from .models.category_model import Category
-from .models.product_model import Product, Image, NewLabel, SaleLabel, Size, Color
+from .models.product_model import Product, Image, NewLabel, SaleLabel, Size, Color, ProductVariant, ProductSerialItem
 from .models import ProductType, GenericName, Brand, ProductBarcode, ProductBatch
 from .models.unit_model import Unit
 from .pagination import ProductPagination
@@ -53,7 +54,7 @@ from products.branch_inventory import (
 )
 
 from .models.inventory_model import ProductStockMovement
-from .serializers import AddStockSerializer, ProductStockMovementSerializer
+from .serializers import AddStockSerializer, ProductStockMovementSerializer, ProductSerialItemSerializer
 
 
 class ProductOptionsView(APIView):
@@ -587,13 +588,44 @@ class ProductViewSet(viewsets.ModelViewSet):
         if branch_id:
             qs = qs.filter(branch_id=branch_id)
 
+        # Filter by warehouse_id for warehouse-level inventory
+        warehouse_id = self.request.query_params.get(
+            "warehouse_id"
+        ) or self.request.query_params.get("warehouseId")
+        if warehouse_id:
+            qs = qs.filter(warehouse_id=warehouse_id)
+
+        # Filter by location_status (warehouse/branch)
+        location_status = self.request.query_params.get("location_status")
+        if location_status:
+            qs = qs.filter(location_status=location_status)
+
+        # Filter by transaction_status (unsold/sold/returned/rejected)
+        transaction_status = self.request.query_params.get(
+            "transaction_status")
+        if transaction_status:
+            qs = qs.filter(transaction_status=transaction_status)
+
         return qs
 
     # === CRUD Operations ===
 
     def perform_create(self, serializer):
-        """Create a new product with appropriate company/branch assignment."""
+        """Create a new product with appropriate company/branch assignment.
+
+        If warehouse_id is provided in the request, the product is assigned to that
+        warehouse (location_status=warehouse) and a PurchaseOrder with status=pending
+        is automatically created.
+        """
         user = getattr(self.request, "user", None)
+        req_data = self.request.data if isinstance(
+            self.request.data, dict) else {}
+        warehouse_id = req_data.get(
+            "warehouse_id") or req_data.get("warehouseId")
+        company_id = req_data.get("company_id") or req_data.get("companyId")
+
+        # Resolve company
+        company = None
         if user and not is_unrestricted_user(user):
             company = getattr(user, "companyId", None)
             if company is None and hasattr(user, "branchAccess"):
@@ -601,12 +633,93 @@ class ProductViewSet(viewsets.ModelViewSet):
                     user.branchAccess.values_list("company_id", flat=True)
                 )
                 if len(company_ids) == 1:
-                    serializer.save(companyId_id=next(iter(company_ids)))
+                    company_id_val = next(iter(company_ids))
+                    if warehouse_id:
+                        product = serializer.save(
+                            companyId_id=company_id_val,
+                            warehouse_id=warehouse_id,
+                            location_status="warehouse",
+                            transaction_status="unsold",
+                        )
+                    else:
+                        product = serializer.save(companyId_id=company_id_val)
+                    if warehouse_id:
+                        self._auto_create_purchase_order(
+                            product, warehouse_id, company_id or company_id_val, user)
                     return
 
-            serializer.save(companyId=company)
-            return
-        serializer.save()
+        extra_kwargs = {}
+        if warehouse_id:
+            extra_kwargs.update(
+                warehouse_id=warehouse_id,
+                location_status="warehouse",
+                transaction_status="unsold",
+            )
+        if company:
+            product = serializer.save(companyId=company, **extra_kwargs)
+        elif company_id:
+            product = serializer.save(companyId_id=company_id, **extra_kwargs)
+        else:
+            product = serializer.save(**extra_kwargs)
+
+        if warehouse_id:
+            resolved_company_id = company_id or (
+                company.pk if company else None)
+            self._auto_create_purchase_order(
+                product, warehouse_id, resolved_company_id, user)
+
+    def _auto_create_purchase_order(self, product, warehouse_id, company_id, user):
+        """Auto-create a PurchaseOrder with status=pending when a product is added to warehouse."""
+        from purchase.models import PurchaseOrder, PurchaseOrderItem
+        from decimal import Decimal
+
+        actor = (
+            user.username if user and getattr(
+                user, "is_authenticated", False) else "System"
+        )
+
+        try:
+            with transaction.atomic():
+                po = PurchaseOrder.objects.create(
+                    warehouse_id=warehouse_id,
+                    companyId_id=company_id,
+                    status="pending",
+                    notes=f"Auto-created when product '{product.name}' was added to warehouse",
+                    created_by=actor,
+                )
+                variants = list(product.variants.all())
+                if variants:
+                    for variant in variants:
+                        PurchaseOrderItem.objects.create(
+                            purchase_order=po,
+                            product=product,
+                            variant=variant,
+                            name=f"{product.name} ({variant.size or ''}{variant.color or ''})".strip(
+                                " ()"),
+                            quantity=max(int(variant.size_qty or 1), 1),
+                            unit="pcs",
+                            unit_price=Decimal(
+                                str(variant.supplier_price or product.supplier_price or 0)),
+                            variant_size=variant.size or "",
+                            variant_color=variant.color or "",
+                            variant_unique_code=variant.unique_code or "",
+                        )
+                else:
+                    PurchaseOrderItem.objects.create(
+                        purchase_order=po,
+                        product=product,
+                        name=product.name or "",
+                        quantity=max(int(product.quantity or 1), 1),
+                        unit="pcs",
+                        unit_price=Decimal(str(product.supplier_price or 0)),
+                    )
+                po.recalc_total()
+        except Exception as exc:
+            # Log but don't fail the product creation
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to auto-create PO for product %s: %s", product.pk, exc
+            )
 
     def perform_update(self, serializer):
         """Update a product and record stock movement audit trail."""
@@ -1154,6 +1267,137 @@ class ProductPostSet(viewsets.ModelViewSet):
         )
         ser = ProductStockMovementSerializer(qs, many=True)
         return Response(ser.data)
+
+
+class ProductSerialItemViewSet(viewsets.ModelViewSet):
+    """
+    Item-level barcode/serial tracking for physical units in warehouse or branch.
+
+    Standard CRUD + three custom actions:
+      GET  serial-items/lookup/?code=<serial_code>  — identify a unit by code
+      POST serial-items/<id>/scan/                  — record a scan + update status
+      POST serial-items/generate/                   — bulk-create N serial items
+    """
+    serializer_class = ProductSerialItemSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        qs = ProductSerialItem.objects.select_related(
+            "product", "variant", "warehouse", "branch"
+        )
+        p = self.request.query_params
+        if p.get("warehouse_id"):
+            qs = qs.filter(warehouse_id=p["warehouse_id"])
+        if p.get("variant_id"):
+            qs = qs.filter(variant_id=p["variant_id"])
+        if p.get("product_id"):
+            qs = qs.filter(product_id=p["product_id"])
+        if p.get("status"):
+            qs = qs.filter(status=p["status"])
+        if p.get("branch_id"):
+            qs = qs.filter(branch_id=p["branch_id"])
+        return qs
+
+    @action(detail=False, methods=["get"], url_path="lookup")
+    def lookup(self, request):
+        """GET ?code=<serial_code> — returns the serial item if found, 404 otherwise."""
+        code = request.query_params.get("code", "").strip()
+        if not code:
+            return Response(
+                {"detail": "code query param is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        item = (
+            ProductSerialItem.objects
+            .select_related("product", "variant__product", "warehouse", "branch")
+            .filter(serial_code=code)
+            .first()
+        )
+        if not item:
+            return Response(
+                {"found": False, "code": code},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        data = self.get_serializer(item).data
+        data["found"] = True
+        return Response(data)
+
+    @action(detail=True, methods=["post"], url_path="scan")
+    def scan(self, request, pk=None):
+        """Record a scan timestamp and optionally update status, condition, notes."""
+        from django.utils.timezone import now as tz_now
+        item = self.get_object()
+        item.last_scanned_at = tz_now()
+        update_fields = ["last_scanned_at", "updated_at"]
+        if "status" in request.data:
+            item.status = request.data["status"]
+            update_fields.append("status")
+        if "condition" in request.data:
+            item.condition = request.data["condition"]
+            update_fields.append("condition")
+        if "notes" in request.data:
+            item.notes = request.data["notes"]
+            update_fields.append("notes")
+        item.save(update_fields=update_fields)
+        return Response(self.get_serializer(item).data)
+
+    @action(detail=False, methods=["post"], url_path="generate")
+    def generate(self, request):
+        """
+        Bulk-create N serial items for a given variant or product.
+
+        Body: { variant_id, product_id, quantity, warehouse_id (optional) }
+        """
+        variant_id = request.data.get("variant_id")
+        product_id = request.data.get("product_id")
+        quantity = int(request.data.get("quantity", 0))
+        if quantity <= 0:
+            return Response(
+                {"detail": "quantity must be > 0."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not variant_id and not product_id:
+            return Response(
+                {"detail": "variant_id or product_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        warehouse_id = request.data.get("warehouse_id")
+        variant = None
+        product = None
+        if variant_id:
+            try:
+                variant = ProductVariant.objects.select_related(
+                    "product").get(id=variant_id)
+                product = variant.product
+            except ProductVariant.DoesNotExist:
+                return Response(
+                    {"detail": "Variant not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+        else:
+            try:
+                product = Product.objects.get(id=product_id)
+            except Product.DoesNotExist:
+                return Response(
+                    {"detail": "Product not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+        # Resolve warehouse_id fallback from product
+        if not warehouse_id and product:
+            warehouse_id = getattr(product, "warehouse_id", None)
+        created = []
+        for _ in range(quantity):
+            item = ProductSerialItem(
+                product=product,
+                variant=variant,
+                warehouse_id=warehouse_id,
+            )
+            item.save()
+            created.append(item)
+        return Response(
+            self.get_serializer(created, many=True).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class PicturePostSet(viewsets.ModelViewSet):
