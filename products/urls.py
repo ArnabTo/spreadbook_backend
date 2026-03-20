@@ -9,6 +9,7 @@ from .api import (
     CategoryViewSet,
     UnitViewSet,
     PosProductIndexView,
+    POSCatalogView,
     ProductOptionsView,
     ProductTypeViewSet,
     GenericNameViewSet,
@@ -16,6 +17,7 @@ from .api import (
     ProductBarcodeViewSet,
     ProductBatchViewSet,
     ProductSerialItemViewSet,
+    StockTransferViewSet,
 )
 from .api import ColorViewSet, SizeViewSet
 from .inventory_api import (
@@ -57,6 +59,11 @@ router.register("api/inventory/movements",
                 StockMovementViewSet, "stock-movements")
 router.register("api/product/serial-items",
                 ProductSerialItemViewSet, "serial-items")
+# Alternative path used by the stock-transfer frontend
+router.register("api/product-serial-items",
+                ProductSerialItemViewSet, "serial-items-alt")
+router.register("api/stock-transfers",
+                StockTransferViewSet, "stock-transfers")
 
 
 urlpatterns = router.urls
@@ -72,5 +79,10 @@ urlpatterns = [
         "api/pos/product-index/",
         PosProductIndexView.as_view(),
         name="pos-product-index",
+    ),
+    path(
+        "api/pos/catalog/",
+        POSCatalogView.as_view(),
+        name="pos-catalog",
     ),
 ] + urlpatterns

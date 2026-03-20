@@ -11,8 +11,9 @@ from django.db.models import Q, Prefetch
 from django.db import transaction
 
 from .models.category_model import Category
-from .models.product_model import Product, Image, NewLabel, SaleLabel, Size, Color, ProductVariant, ProductSerialItem
+from .models.product_model import Product, Image, NewLabel, SaleLabel, Size, Color, ProductVariant, ProductSerialItem, StockSummary
 from .models import ProductType, GenericName, Brand, ProductBarcode, ProductBatch
+from .models.stock_transfer_model import StockTransfer, StockTransferItem
 from .models.unit_model import Unit
 from .pagination import ProductPagination
 from .filters import ProductFilter
@@ -55,6 +56,8 @@ from products.branch_inventory import (
 
 from .models.inventory_model import ProductStockMovement
 from .serializers import AddStockSerializer, ProductStockMovementSerializer, ProductSerialItemSerializer
+from .serializers import StockTransferSerializer, StockTransferCreateSerializer
+from .serializers import StockSummaryPOSSerializer
 
 
 class ProductOptionsView(APIView):
@@ -1288,14 +1291,19 @@ class ProductSerialItemViewSet(viewsets.ModelViewSet):
         p = self.request.query_params
         if p.get("warehouse_id"):
             qs = qs.filter(warehouse_id=p["warehouse_id"])
-        if p.get("variant_id"):
-            qs = qs.filter(variant_id=p["variant_id"])
-        if p.get("product_id"):
-            qs = qs.filter(product_id=p["product_id"])
+        if p.get("variant_id") or p.get("variant"):
+            qs = qs.filter(variant_id=p.get("variant_id") or p.get("variant"))
+        if p.get("product_id") or p.get("product"):
+            qs = qs.filter(product_id=p.get("product_id") or p.get("product"))
         if p.get("status"):
             qs = qs.filter(status=p["status"])
-        if p.get("branch_id"):
-            qs = qs.filter(branch_id=p["branch_id"])
+        if p.get("branch_id") or p.get("branch"):
+            qs = qs.filter(branch_id=p.get("branch_id") or p.get("branch"))
+        if p.get("barcode") or p.get("serial_code"):
+            qs = qs.filter(serial_code=p.get("barcode")
+                           or p.get("serial_code"))
+        if p.get("company"):
+            qs = qs.filter(product__companyId_id=p["company"])
         return qs
 
     @action(detail=False, methods=["get"], url_path="lookup")
@@ -1527,3 +1535,153 @@ class PosProductIndexView(APIView):
         paginator = PosProductIndexPagination()
         page = paginator.paginate_queryset(payload, request)
         return paginator.get_paginated_response(page)
+
+
+class POSCatalogView(APIView):
+    """Branch-scoped POS catalog derived from StockSummary.
+
+    GET /api/pos/catalog/?branch_id=<uuid>[&category=<name>][&search=<q>][&page=<n>][&page_size=<n>]
+
+    Returns only items whose ``quantity > 0`` and ``location='in_branch'``.
+    Each result row is ready to be loaded directly into the POS cart.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        branch_id = request.query_params.get(
+            "branch_id") or request.query_params.get("branchId")
+        if not branch_id:
+            return Response(
+                {"success": False, "error": "branch_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Access-control: non-privileged users may only see their own branches.
+        if not is_unrestricted_user(request.user):
+            allowed_branch_ids = get_allowed_branch_ids_for_user(request.user)
+            if allowed_branch_ids is not None and str(branch_id) not in {
+                str(b) for b in allowed_branch_ids
+            }:
+                return Response(
+                    {"success": False, "error": "Access denied"},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        qs = (
+            StockSummary.objects.filter(
+                branch_id=branch_id, location="in_branch",
+            )
+            .select_related("product", "variant")
+            .order_by("product__name", "variant__size")
+        )
+
+        category = request.query_params.get("category")
+        if category:
+            qs = qs.filter(product__category__iexact=category)
+
+        q = request.query_params.get("search") or request.query_params.get("q")
+        if q:
+            qs = qs.filter(
+                Q(product__name__icontains=q)
+                | Q(product__code__icontains=q)
+                | Q(variant__size__icontains=q)
+                | Q(variant__size_code__icontains=q)
+            )
+
+        try:
+            page = max(1, int(request.query_params.get("page", 1)))
+            page_size = min(
+                200, max(1, int(request.query_params.get("page_size", 80))))
+        except (ValueError, TypeError):
+            page = 1
+            page_size = 80
+
+        total = qs.count()
+        offset = (page - 1) * page_size
+        items = qs[offset: offset + page_size]
+        has_next = (offset + page_size) < total
+
+        serializer = StockSummaryPOSSerializer(items, many=True)
+        return Response(
+            {
+                "success": True,
+                "data": {
+                    "count": total,
+                    "next": has_next,
+                    "previous": page > 1,
+                    "results": serializer.data,
+                },
+            }
+        )
+
+
+class StockTransferViewSet(viewsets.ModelViewSet):
+    """
+    CRUD + complete/cancel actions for StockTransfer.
+
+    GET  /api/stock-transfers/?company=<id>   — list
+    POST /api/stock-transfers/               — create (with nested items)
+    POST /api/stock-transfers/<id>/complete/ — execute transfer
+    POST /api/stock-transfers/<id>/cancel/   — cancel transfer
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return StockTransferCreateSerializer
+        return StockTransferSerializer
+
+    def get_queryset(self):
+        qs = StockTransfer.objects.prefetch_related(
+            "items__serial_item",
+            "items__product",
+            "items__variant",
+        ).select_related(
+            "company",
+            "source_warehouse",
+            "source_branch",
+            "destination_warehouse",
+            "destination_branch",
+        )
+        p = self.request.query_params
+        if p.get("company"):
+            qs = qs.filter(company_id=p["company"])
+        if p.get("status"):
+            qs = qs.filter(status=p["status"])
+        if p.get("transfer_type"):
+            qs = qs.filter(transfer_type=p["transfer_type"])
+        return qs.order_by("-created_at")
+
+    def create(self, request, *args, **kwargs):
+        serializer = StockTransferCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        transfer = serializer.save()
+        return Response(
+            StockTransferSerializer(transfer).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(detail=True, methods=["post"], url_path="complete")
+    def complete(self, request, pk=None):
+        """Execute the transfer: update serial items + StockSummary."""
+        transfer = self.get_object()
+        try:
+            transfer.complete_transfer()
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(StockTransferSerializer(transfer).data)
+
+    @action(detail=True, methods=["post"], url_path="cancel")
+    def cancel(self, request, pk=None):
+        """Cancel a draft or in-transit transfer."""
+        transfer = self.get_object()
+        if transfer.status not in ("draft", "in_transit"):
+            return Response(
+                {"detail": f"Cannot cancel a transfer with status '{transfer.status}'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        transfer.status = "cancelled"
+        transfer.save(update_fields=["status", "updated_at"])
+        return Response(StockTransferSerializer(transfer).data)

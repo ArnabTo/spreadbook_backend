@@ -13,6 +13,7 @@ from .models.product_model import (
     Color,
     ProductVariant,
     ProductSerialItem,
+    StockSummary,
 )
 from .models.rating_model import Rating
 from .models.review_model import Review
@@ -22,6 +23,7 @@ from .models.inventory_model import (
     StockMovement,
     ProductStockMovement,
 )
+from .models.stock_transfer_model import StockTransfer, StockTransferItem
 from .models import ProductType, GenericName, Brand, ProductBarcode, ProductBatch
 from .models.unit_model import Unit
 from suppliers.models import Supplier
@@ -676,3 +678,242 @@ class ProductSerialItemSerializer(serializers.ModelSerializer):
             "color": obj.variant.color,
             "unique_code": obj.variant.unique_code,
         }
+
+
+class StockTransferItemSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(
+        source="product.name", read_only=True, default=None)
+    variant_label = serializers.SerializerMethodField()
+
+    class Meta:
+        model = StockTransferItem
+        fields = [
+            "id",
+            "transfer",
+            "serial_item",
+            "product",
+            "product_name",
+            "variant",
+            "variant_label",
+            "status",
+            "notes",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ("id", "created_at", "updated_at")
+
+    def get_variant_label(self, obj):
+        if not obj.variant:
+            return None
+        parts = [obj.variant.size_name, obj.variant.color]
+        return " · ".join(p for p in parts if p) or obj.variant.unique_code
+
+
+class StockTransferItemWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StockTransferItem
+        fields = ["serial_item", "product", "variant", "notes"]
+
+
+class StockTransferSerializer(serializers.ModelSerializer):
+    items = StockTransferItemSerializer(many=True, read_only=True)
+    source_warehouse_name = serializers.CharField(
+        source="source_warehouse.name", read_only=True, default=None
+    )
+    source_branch_name = serializers.CharField(
+        source="source_branch.name", read_only=True, default=None
+    )
+    destination_warehouse_name = serializers.CharField(
+        source="destination_warehouse.name", read_only=True, default=None
+    )
+    destination_branch_name = serializers.CharField(
+        source="destination_branch.name", read_only=True, default=None
+    )
+
+    class Meta:
+        model = StockTransfer
+        fields = [
+            "id",
+            "transfer_number",
+            "company",
+            "transfer_type",
+            "status",
+            "source_warehouse",
+            "source_warehouse_name",
+            "source_branch",
+            "source_branch_name",
+            "destination_warehouse",
+            "destination_warehouse_name",
+            "destination_branch",
+            "destination_branch_name",
+            "notes",
+            "transferred_by",
+            "completed_at",
+            "created_at",
+            "updated_at",
+            "items",
+        ]
+        read_only_fields = ("id", "transfer_number",
+                            "completed_at", "created_at", "updated_at")
+
+
+class StockSummaryPOSSerializer(serializers.ModelSerializer):
+    """Serializer for POS catalog items backed by a single StockSummary row.
+
+    Each row represents one product (or one product+variant) at a specific branch.
+    The ``id`` field is a cart-safe composite key so the frontend can send it back
+    verbatim during order creation.
+    """
+
+    # Stable cart id: composite for variant rows, plain product UUID otherwise.
+    id = serializers.SerializerMethodField()
+    summary_id = serializers.UUIDField(source="id", read_only=True)
+
+    # Product fields
+    product_id = serializers.SerializerMethodField()
+    name = serializers.SerializerMethodField()
+    category = serializers.SerializerMethodField()
+    code = serializers.SerializerMethodField()
+    sku = serializers.SerializerMethodField()
+    price = serializers.SerializerMethodField()
+    image = serializers.SerializerMethodField()
+
+    # Stock
+    in_stock = serializers.IntegerField(source="quantity", read_only=True)
+    available = serializers.SerializerMethodField()
+
+    # Variant fields (null for non-variant products)
+    variant_id = serializers.SerializerMethodField()
+    variant_size = serializers.SerializerMethodField()
+    variant_size_name = serializers.SerializerMethodField()
+    variant_color = serializers.SerializerMethodField()
+    variant_size_code = serializers.SerializerMethodField()
+
+    class Meta:
+        model = StockSummary
+        fields = [
+            "summary_id",
+            "id",
+            "product_id",
+            "variant_id",
+            "name",
+            "category",
+            "code",
+            "sku",
+            "price",
+            "image",
+            "in_stock",
+            "available",
+            "variant_size",
+            "variant_size_name",
+            "variant_color",
+            "variant_size_code",
+        ]
+
+    def get_id(self, obj):
+        product_id = str(obj.product_id)
+        if obj.variant_id:
+            return f"{product_id}__var__{obj.variant_id}"
+        return product_id
+
+    def get_product_id(self, obj):
+        return str(obj.product_id) if obj.product_id else None
+
+    def get_variant_id(self, obj):
+        return str(obj.variant_id) if obj.variant_id else None
+
+    def get_name(self, obj):
+        base = getattr(obj.product, "name", "") or ""
+        if obj.variant_id:
+            parts = [
+                getattr(obj.variant, "size_name", None) or getattr(
+                    obj.variant, "size", None),
+                getattr(obj.variant, "color", None),
+            ]
+            label = " / ".join(p for p in parts if p)
+            return f"{base} - {label}" if label else base
+        return base
+
+    def get_category(self, obj):
+        cat = getattr(obj.product, "category", None)
+        return str(cat) if cat else "products"
+
+    def get_code(self, obj):
+        if obj.variant_id:
+            size_code = getattr(obj.variant, "size_code", None)
+            if size_code:
+                return size_code
+            product_code = getattr(obj.product, "code", None)
+            size = getattr(obj.variant, "size", None) or getattr(
+                obj.variant, "size_name", None)
+            if product_code and size:
+                return f"{product_code}_{size}"
+        return getattr(obj.product, "code", None)
+
+    def get_sku(self, obj):
+        return getattr(obj.product, "sku", None)
+
+    def get_price(self, obj):
+        if obj.variant_id:
+            variant_price = float(getattr(obj.variant, "price", 0) or 0)
+            if variant_price > 0:
+                return variant_price
+        price_sale = float(getattr(obj.product, "priceSale", 0) or 0)
+        if price_sale > 0:
+            return price_sale
+        return float(getattr(obj.product, "price", 0) or 0)
+
+    def get_image(self, obj):
+        cover = getattr(obj.product, "coverUrl", None)
+        if cover:
+            return str(cover) if cover else None
+        # ImageField/FileField raises ValueError when no file is associated.
+        # Access .name (the stored path string) instead of the descriptor itself.
+        image_field = getattr(obj.product, "image", None)
+        if not image_field:
+            return None
+        try:
+            return image_field.name or None
+        except Exception:
+            return None
+
+    def get_available(self, obj):
+        return obj.quantity > 0
+
+    def get_variant_size(self, obj):
+        return getattr(obj.variant, "size", None) if obj.variant_id else None
+
+    def get_variant_size_name(self, obj):
+        return getattr(obj.variant, "size_name", None) if obj.variant_id else None
+
+    def get_variant_color(self, obj):
+        return getattr(obj.variant, "color", None) if obj.variant_id else None
+
+    def get_variant_size_code(self, obj):
+        return getattr(obj.variant, "size_code", None) if obj.variant_id else None
+
+
+class StockTransferCreateSerializer(serializers.ModelSerializer):
+    """Write serializer: accepts nested items on creation."""
+    items = StockTransferItemWriteSerializer(many=True)
+
+    class Meta:
+        model = StockTransfer
+        fields = [
+            "company",
+            "transfer_type",
+            "source_warehouse",
+            "source_branch",
+            "destination_warehouse",
+            "destination_branch",
+            "notes",
+            "transferred_by",
+            "items",
+        ]
+
+    def create(self, validated_data):
+        items_data = validated_data.pop("items", [])
+        transfer = StockTransfer.objects.create(**validated_data)
+        for item_data in items_data:
+            StockTransferItem.objects.create(transfer=transfer, **item_data)
+        return transfer

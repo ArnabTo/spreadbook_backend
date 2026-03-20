@@ -541,24 +541,6 @@ class Product(Timestamp):
         ]
 
 
-# price = models.FloatField(default=0, blank=True, null=True)
-#     priceSale = models.FloatField(default=0, blank=True, null=True)
-#     regular_price = models.FloatField(default=0, blank=True, null=True)
-#     taxes = models.FloatField(default=0, blank=True, null=True)
-#     in_stock = models.IntegerField(default=0)
-#     is_publish  = models.BooleanField(default=False)
-
-#     totalRatings = models.FloatField(default=0, blank=True, null=True)
-#     totalSold = models.IntegerField(default=0)
-#     totalReviews  = models.FloatField(default=0, blank=True, null=True)
-# class Size(models.Model):
-#     product  = models.ForeignKey(Product,related_name='sizes', on_delete=models.CASCADE, null=True)
-#     content  = models.CharField(max_length=100)
-
-#     def __str__(self):
-#         return f'{self.content}'
-
-
 class Image(models.Model):
     product = models.ForeignKey(
         Product, related_name="images", on_delete=models.CASCADE, null=True
@@ -652,17 +634,6 @@ class ProductVariant(models.Model):
     )
 
     # Physical condition of this variant
-    CONDITION_CHOICES = (
-        ("good", "Good"),
-        ("defective", "Defective"),
-    )
-    condition = models.CharField(
-        max_length=20,
-        choices=CONDITION_CHOICES,
-        default="good",
-        help_text="Physical condition of this variant: good or defective",
-    )
-
     # Optional image for variant
     image = models.ImageField(
         upload_to=upload_to,
@@ -730,11 +701,6 @@ class ProductSerialItem(models.Model):
         ("received", "Received"),
     )
 
-    CONDITION_CHOICES = (
-        ("good", "Good"),
-        ("defective", "Defective"),
-    )
-
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
     # Parent product — set when product has NO variants
@@ -779,13 +745,7 @@ class ProductSerialItem(models.Model):
         choices=STATUS_CHOICES,
         default="in_warehouse",
         db_index=True,
-        help_text="Current location/status of this physical unit",
-    )
-    condition = models.CharField(
-        max_length=20,
-        choices=CONDITION_CHOICES,
-        default="good",
-        help_text="Physical condition of this unit: good or defective",
+        help_text="Current location/status of this physical unit. Use 'defective' to flag bad condition.",
     )
 
     # Current location of this physical unit
@@ -849,3 +809,142 @@ class ProductSerialItem(models.Model):
 
     def __str__(self):
         return self.serial_code
+
+
+class StockSummary(models.Model):
+    """
+    Aggregated stock ledger: one row per (product, variant, location).
+
+    - Replaces the old pattern of storing in_stock directly on Product/Variant.
+    - Product.in_stock is auto-recalculated from StockSummary rows via signal.
+    - Supports multi-location SaaS: the same product can have different
+      quantities per warehouse and per branch.
+    """
+
+    LOCATION_CHOICES = (
+        ("in_warehouse", "In Warehouse"),
+        ("in_branch", "In Branch"),
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # ── Scoping ───────────────────────────────────────────────────────────────
+    company = models.ForeignKey(
+        "company.Company",
+        on_delete=models.CASCADE,
+        db_index=True,
+        related_name="stock_summaries",
+        help_text="Owning company (multi-tenant scope)",
+    )
+
+    # ── What ─────────────────────────────────────────────────────────────────
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        db_index=True,
+        related_name="stock_summaries",
+        help_text="Parent product",
+    )
+    variant = models.ForeignKey(
+        ProductVariant,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        db_index=True,
+        related_name="stock_summaries",
+        help_text="Specific variant (null = product has no variants)",
+    )
+
+    # ── Where ─────────────────────────────────────────────────────────────────
+    warehouse = models.ForeignKey(
+        "company.Warehouse",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_index=True,
+        related_name="stock_summaries",
+        help_text="Warehouse holding this stock (mutually exclusive with branch)",
+    )
+    branch = models.ForeignKey(
+        "company.Branch",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_index=True,
+        related_name="stock_summaries",
+        help_text="Branch holding this stock (mutually exclusive with warehouse)",
+    )
+    location = models.CharField(
+        max_length=20,
+        choices=LOCATION_CHOICES,
+        default="in_warehouse",
+        db_index=True,
+        help_text="Whether this stock is in a warehouse or a branch",
+    )
+
+    # ── How many ──────────────────────────────────────────────────────────────
+    quantity = models.IntegerField(
+        default=0,
+        help_text="Available quantity at this location",
+    )
+
+    # ── Timestamps ────────────────────────────────────────────────────────────
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Stock Summary"
+        verbose_name_plural = "Stock Summaries"
+        # One record per (product, variant, warehouse, branch) combination
+        constraints = [
+            models.UniqueConstraint(
+                fields=["product", "variant", "warehouse", "branch"],
+                name="uniq_stock_product_variant_location",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["company", "product"],
+                name="idx_stock_company_product",
+            ),
+            models.Index(
+                fields=["product", "location"],
+                name="idx_stock_product_location",
+            ),
+            models.Index(
+                fields=["warehouse", "product"],
+                name="idx_stock_wh_product",
+            ),
+            models.Index(
+                fields=["branch", "product"],
+                name="idx_stock_branch_product",
+            ),
+        ]
+
+    def __str__(self):
+        loc = self.warehouse or self.branch or "unknown location"
+        variant_str = f" / {self.variant}" if self.variant else ""
+        return f"{self.product}{variant_str} @ {loc}: {self.quantity}"
+
+
+# ── Signal: auto-recalculate Product.in_stock on StockSummary change ─────────
+
+def _recalculate_product_in_stock(product_id):
+    """Sum all StockSummary.quantity rows for product and update Product.in_stock."""
+    from django.db.models import Sum
+    total = (
+        StockSummary.objects
+        .filter(product_id=product_id)
+        .aggregate(total=Sum("quantity"))["total"]
+    ) or 0
+    Product.objects.filter(pk=product_id).update(in_stock=total)
+
+
+@receiver(post_save, sender=StockSummary)
+def stock_summary_post_save(sender, instance, **kwargs):
+    _recalculate_product_in_stock(instance.product_id)
+
+
+@receiver(models.signals.post_delete, sender=StockSummary)
+def stock_summary_post_delete(sender, instance, **kwargs):
+    _recalculate_product_in_stock(instance.product_id)

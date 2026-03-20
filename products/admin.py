@@ -17,6 +17,7 @@ from .models.product_model import (
     Tag,
     Color,
     ProductVariant,
+    StockSummary
 )
 from .models.rating_model import Rating
 from .models.review_model import Review
@@ -645,6 +646,9 @@ class ProductSerialItemAdmin(admin.ModelAdmin):
 
 # Inventory Management Admin
 
+@admin.register(StockSummary)
+class StockSummaryAdmin(admin.ModelAdmin):
+    list_display= ("product", "quantity", "location")
 
 @admin.register(InventoryCategory)
 class InventoryCategoryAdmin(ImportExportModelAdmin):

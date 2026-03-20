@@ -1554,6 +1554,44 @@ class POSOrderCreateSerializer(serializers.Serializer):
                 subtotal += item.total
                 total_prep_time = max(total_prep_time, item.preparation_time)
 
+                # ── Reduce StockSummary quantity + mark ProductSerialItem as sold ──────────
+                # Applies only to Product lines (not restaurant MenuItem lines) when a branch
+                # is known.  Uses select_for_update to prevent two concurrent POS sessions
+                # from overselling the same unit.
+                if product is not None and branch is not None:
+                    from products.models.product_model import (
+                        StockSummary as _StockSummary,
+                        ProductSerialItem as _PSI,
+                    )
+                    from django.db.models import F as _F
+
+                    _summary_filter = {
+                        "product": product,
+                        "branch": branch,
+                        "location": "in_branch",
+                    }
+                    if variant_obj is not None:
+                        _summary_filter["variant"] = variant_obj
+                    else:
+                        _summary_filter["variant__isnull"] = True
+
+                    # Decrement StockSummary.quantity (floor at 0 to avoid negatives).
+                    _rows_updated = (
+                        _StockSummary.objects.select_for_update()
+                        .filter(**_summary_filter, quantity__gt=0)
+                        .update(quantity=_F("quantity") - quantity)
+                    )
+
+                    # Mark corresponding serial/unit records as sold (FIFO order).
+                    _serial_qs = _PSI.objects.select_for_update(
+                        skip_locked=True
+                    ).filter(product=product, branch=branch, status="in_branch")
+                    if variant_obj is not None:
+                        _serial_qs = _serial_qs.filter(variant=variant_obj)
+                    for _serial in _serial_qs.order_by("id")[:quantity]:
+                        _serial.status = "sold"
+                        _serial.save(update_fields=["status"])
+
                 # Promo engine expects a simple list of dicts with id/price/quantity/category.
                 items_for_promo.append(
                     {

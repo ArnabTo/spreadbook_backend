@@ -1,3 +1,4 @@
+from settings import urls as SystemSettings
 from supplier_ledger import urls as SupplierLedger
 from common import urls as Common
 from pharmacy import urls as Pharmacy
@@ -76,4 +77,5 @@ urlpatterns = [
     path("", include(Suppliers)),
     path("", include(TableManagement)),
     path("", include(SupplierLedger)),
+    path("", include(SystemSettings)),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
