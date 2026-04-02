@@ -5,7 +5,7 @@ from import_export.widgets import ForeignKeyWidget
 from django.contrib import admin
 from django.utils.html import format_html
 
-from company.models import Company, Branch
+from company.models import Company, Branch, Warehouse
 from .models import Category, Product, Unit
 from .models import ProductType, GenericName, Brand, ProductBarcode, ProductBatch
 from .models.product_model import (
@@ -17,7 +17,8 @@ from .models.product_model import (
     Tag,
     Color,
     ProductVariant,
-    StockSummary
+    StockSummary,
+    UnitConversionGroup,
 )
 from .models.rating_model import Rating
 from .models.review_model import Review
@@ -99,6 +100,50 @@ class BranchByNameOrCodeWidget(ForeignKeyWidget):
         return self._cache[key]
 
 
+class UnitConversionGroupByNameWidget(ForeignKeyWidget):
+    """Look up UnitConversionGroup by name (case-insensitive)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(UnitConversionGroup, "name", *args, **kwargs)
+        self._cache = {}
+
+    def clean(self, value, row=None, *args, **kwargs):
+        value = str(value).strip() if value is not None else ""
+        if not value:
+            return None
+        key = value.lower()
+        if key not in self._cache:
+            obj = UnitConversionGroup.objects.filter(name__iexact=value).first()
+            # Fallback: try numeric PK (ID)
+            if obj is None and value.isdigit():
+                obj = UnitConversionGroup.objects.filter(pk=int(value)).first()
+            self._cache[key] = obj
+        return self._cache[key]
+
+
+class WarehouseByNameOrCodeWidget(ForeignKeyWidget):
+    """Look up Warehouse by name first, then by code (case-insensitive)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(Warehouse, "name", *args, **kwargs)
+        self._cache = {}
+
+    def clean(self, value, row=None, *args, **kwargs):
+        value = str(value).strip() if value is not None else ""
+        if not value:
+            return None
+        key = value.lower()
+        if key not in self._cache:
+            obj = Warehouse.objects.filter(name__iexact=value).first()
+            if obj is None:
+                obj = Warehouse.objects.filter(code__iexact=value).first()
+            # Fallback: try numeric PK
+            if obj is None and value.isdigit():
+                obj = Warehouse.objects.filter(pk=int(value)).first()
+            self._cache[key] = obj
+        return self._cache[key]
+
+
 class ProductImportResource(resources.ModelResource):
     # foreignkey fields handling
     generic_name = fields.Field(
@@ -116,6 +161,26 @@ class ProductImportResource(resources.ModelResource):
         column_name="branch",
         widget=BranchByNameOrCodeWidget(),
     )
+    
+    # Unit conversion and stock fields
+    unit_conversion_group = fields.Field(
+        attribute="unit_conversion_group",
+        column_name="unit_conversion_group",
+        widget=UnitConversionGroupByNameWidget(),
+    )
+    location_type = fields.Field(
+        attribute="location_type",
+        column_name="location_type",
+    )  # "warehouse" or "branch"
+    location_id = fields.Field(
+        attribute="location_id",
+        column_name="location_id",
+    )  # ID of warehouse or branch
+    stock_quantity = fields.Field(
+        attribute="stock_quantity",
+        column_name="stock_quantity",
+    )  # Initial stock quantity
+    
     HEADER_ALIASES = {
         "brand name": "brand_name",
         "dosage form": "dosage_form",
@@ -171,6 +236,18 @@ class ProductImportResource(resources.ModelResource):
         "recently added": "recently_added",
         "recently viewed": "recently_viewed",
         "recently updated": "recently_updated",
+        # Stock and unit conversion aliases
+        "unit conversion": "unit_conversion_group",
+        "unit conversion group": "unit_conversion_group",
+        "conversion group": "unit_conversion_group",
+        "location type": "location_type",
+        "location": "location_type",
+        "location id": "location_id",
+        "warehouse id": "location_id",
+        "branch id": "location_id",
+        "stock": "stock_quantity",
+        "stock quantity": "stock_quantity",
+        "initial stock": "stock_quantity",
     }
 
     class Meta:
@@ -279,6 +356,11 @@ class ProductImportResource(resources.ModelResource):
                 print(f"Pre-created {len(generics_to_create)} GenericName objects")
 
     def before_import_row(self, row, **kwargs):
+        """
+        Clean and validate row data before import.
+        Allows products to be created even if optional fields are missing.
+        Only requires minimal critical fields (name or code).
+        """
         # Clean price fields if they are strings
         price_fields = ["price", "priceSale", "regular_price", "supplier_price", "mrp"]
         for field in price_fields:
@@ -295,10 +377,73 @@ class ProductImportResource(resources.ModelResource):
                         row[field] = float(cleaned)
                     except ValueError:
                         row[field] = None
-
-        # Skip row if all mapped fields are empty
-        if not any(self._has_value(value) for value in row.values()):
-            raise exceptions.ImportError("Skipping empty row")
+        
+        # Clean stock quantity if provided
+        if "stock_quantity" in row and isinstance(row["stock_quantity"], str):
+            try:
+                row["stock_quantity"] = int(row["stock_quantity"].strip())
+            except (ValueError, AttributeError):
+                row["stock_quantity"] = None
+        
+        # Check for critical fields - product needs at least name or code
+        has_name = self._has_value(row.get("name"))
+        has_code = self._has_value(row.get("code"))
+        
+        if not (has_name or has_code):
+            raise exceptions.ImportError("Skipping row: missing both name and code")
+    
+    def after_save_instance(self, instance, using_transactions, dry_run, **kwargs):
+        """
+        Create StockSummary records after product is saved.
+        This is called by django-import-export after instance.save().
+        """
+        # Get the extra row data stored during import
+        source_row = kwargs.get('row')
+        if not source_row:
+            return
+        
+        # Extract stock-related fields
+        unit_conversion_group_id = source_row.get('unit_conversion_group')
+        location_type = source_row.get('location_type')
+        location_id = source_row.get('location_id')
+        stock_quantity = source_row.get('stock_quantity')
+        
+        # Only create StockSummary if we have necessary data
+        if not (unit_conversion_group_id and location_type and location_id and stock_quantity):
+            return
+        
+        try:
+            # Get the UnitConversionGroup to find its base_unit
+            unit_group = UnitConversionGroup.objects.get(id=unit_conversion_group_id)
+            
+            # Determine warehouse vs branch
+            warehouse = None
+            branch = None
+            
+            if location_type == "warehouse":
+                warehouse = Warehouse.objects.get(id=location_id)
+            elif location_type == "branch":
+                branch = Branch.objects.get(id=location_id)
+            else:
+                return  # Invalid location type
+            
+            # Create StockSummary with the provided quantity
+            # The quantity is assumed to be in the base unit of the conversion group
+            StockSummary.objects.get_or_create(
+                product=instance,
+                variant=None,  # No variant unless specified
+                warehouse=warehouse,
+                branch=branch,
+                company=instance.companyId,
+                location=location_type if location_type == "in_warehouse" else "in_branch",
+                defaults={
+                    "quantity": stock_quantity,
+                }
+            )
+        except (UnitConversionGroup.DoesNotExist, Warehouse.DoesNotExist, 
+                Branch.DoesNotExist, ValueError, TypeError) as e:
+            # Log error but don't fail the import
+            print(f"Warning: Failed to create StockSummary for product {instance.id}: {str(e)}")
 
     def import_row(self, row, instance_loader, **kwargs):
         # Only import fields that exist on the model or are declared on this resource
@@ -388,7 +533,7 @@ class ProductAdmin(ImportExportModelAdmin):
         "createdAt",
         "updateAt",
     )
-    list_filter = ("status", "category", "unit", "status", "supplier")
+    list_filter = ("status", "companyId", "branch", "category", "unit", "status", "supplier")
     search_fields = ("name", "code", "sku", "category", "unit__name")
     list_per_page = 20
     list_editable = ("quantity", "priceSale")

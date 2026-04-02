@@ -14,6 +14,8 @@ from .models.product_model import (
     ProductVariant,
     ProductSerialItem,
     StockSummary,
+    UnitConversionGroup,
+    UnitConversionStep,
 )
 from .models.rating_model import Rating
 from .models.review_model import Review
@@ -185,25 +187,37 @@ class ProductSerializer(serializers.ModelSerializer):
     reviews = ReviewSerializer(many=True, required=False)
     tags = serializers.StringRelatedField(many=True, required=False)
     colors = serializers.StringRelatedField(many=True, required=False)
-    variants = ProductVariantSerializer(
-        many=True, required=False, read_only=True)
+    variants = ProductVariantSerializer(many=True, required=False, read_only=True)
 
     # Dual-unit read-only helpers
-    unit_name = serializers.CharField(
-        source="unit.name", read_only=True, default=None)
+    unit_name = serializers.CharField(source="unit.name", read_only=True, default=None)
     secondary_unit_name = serializers.CharField(
         source="secondary_unit.name", read_only=True, default=None
     )
+    unit_conversion_group_name = serializers.CharField(
+        source="unit_conversion_group.name", read_only=True, default=None
+    )
+    display_unit_name = serializers.CharField(
+        source="display_unit.name", read_only=True, default=None
+    )
     # Warehouse tracking read-only helpers
     warehouse_name = serializers.CharField(
-        source="warehouse.name", read_only=True, default=None)
+        source="warehouse.name", read_only=True, default=None
+    )
 
     class Meta:
         model = Product
         fields = "__all__"
         # Declare extra fields so they appear in the serialized output
-        read_only_fields = ("unit_name", "secondary_unit_name",
-                            "in_stock_secondary", "unique_code", "warehouse_name")
+        read_only_fields = (
+            "unit_name",
+            "secondary_unit_name",
+            "unit_conversion_group_name",
+            "display_unit_name",
+            "in_stock_secondary",
+            "unique_code",
+            "warehouse_name",
+        )
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -287,24 +301,36 @@ class ProductPostSerializer(serializers.ModelSerializer):
     colors = ColorSerializer(many=True, required=False)
 
     # Variants support for clothing products
-    variants = ProductVariantSerializer(
-        many=True, required=False, read_only=False)
+    variants = ProductVariantSerializer(many=True, required=False, read_only=False)
 
     # Dual-unit read-only helpers
-    unit_name = serializers.CharField(
-        source="unit.name", read_only=True, default=None)
+    unit_name = serializers.CharField(source="unit.name", read_only=True, default=None)
     secondary_unit_name = serializers.CharField(
         source="secondary_unit.name", read_only=True, default=None
     )
+    unit_conversion_group_name = serializers.CharField(
+        source="unit_conversion_group.name", read_only=True, default=None
+    )
+    display_unit_name = serializers.CharField(
+        source="display_unit.name", read_only=True, default=None
+    )
     # Warehouse tracking read-only helpers
     warehouse_name = serializers.CharField(
-        source="warehouse.name", read_only=True, default=None)
+        source="warehouse.name", read_only=True, default=None
+    )
 
     class Meta:
         model = Product
         fields = "__all__"
-        read_only_fields = ("unit_name", "secondary_unit_name",
-                            "in_stock_secondary", "unique_code", "warehouse_name")
+        read_only_fields = (
+            "unit_name",
+            "secondary_unit_name",
+            "unit_conversion_group_name",
+            "display_unit_name",
+            "in_stock_secondary",
+            "unique_code",
+            "warehouse_name",
+        )
 
     def create(self, validated_data):
         from django.db import transaction
@@ -329,11 +355,32 @@ class ProductPostSerializer(serializers.ModelSerializer):
                 newLabel=newLabel, saleLabel=saleLabel, **validated_data
             )
 
+            # Create StockSummary record to track stock in base unit
+            # Stock should be stored via StockSummary, not directly on Product.
+            if product.in_stock > 0 or product.companyId:
+                company = product.companyId
+                warehouse = product.warehouse
+                branch = product.branch
+
+                # Determine location from warehouse/branch
+                location = "in_branch" if branch else "in_warehouse"
+
+                # Create StockSummary for the product
+                # Quantity is stored in the base unit of the conversion group
+                StockSummary.objects.create(
+                    company=company,
+                    product=product,
+                    variant=None,  # No variants yet
+                    warehouse=warehouse,
+                    branch=branch,
+                    location=location,
+                    quantity=product.in_stock,  # In base unit
+                )
+
             # Create variants if provided
             if variants_data:
                 for variant_data in variants_data:
-                    ProductVariant.objects.create(
-                        product=product, **variant_data)
+                    ProductVariant.objects.create(product=product, **variant_data)
 
             # Seed a ProductBranchInventory row so per-branch stock/price lookups
             # work correctly from the moment the product is created.
@@ -356,31 +403,26 @@ class ProductPostSerializer(serializers.ModelSerializer):
             # Existing rows may have NULL labels; avoid crashing on PATCH.
             if newlabel_data is not None:
                 if instance.newLabel is None:
-                    instance.newLabel = NewLabel.objects.create(
-                        **newlabel_data)
+                    instance.newLabel = NewLabel.objects.create(**newlabel_data)
                     instance.save(update_fields=["newLabel"])
                 else:
                     newlabel_serializer = self.fields["newLabel"]
-                    newlabel_serializer.update(
-                        instance.newLabel, newlabel_data)
+                    newlabel_serializer.update(instance.newLabel, newlabel_data)
 
             if salelabel_data is not None:
                 if instance.saleLabel is None:
-                    instance.saleLabel = SaleLabel.objects.create(
-                        **salelabel_data)
+                    instance.saleLabel = SaleLabel.objects.create(**salelabel_data)
                     instance.save(update_fields=["saleLabel"])
                 else:
                     salelabel_serializer = self.fields["saleLabel"]
-                    salelabel_serializer.update(
-                        instance.saleLabel, salelabel_data)
+                    salelabel_serializer.update(instance.saleLabel, salelabel_data)
 
             # Handle variants update (replace all variants)
             if variants_data is not None:
                 # Delete existing variants and create new ones
                 instance.variants.all().delete()
                 for variant_data in variants_data:
-                    ProductVariant.objects.create(
-                        product=instance, **variant_data)
+                    ProductVariant.objects.create(product=instance, **variant_data)
 
             # Update product fields
             updated_instance = super().update(instance, validated_data)
@@ -492,6 +534,40 @@ class UnitSerializer(serializers.ModelSerializer):
         fields = ["id", "name", "status"]
 
 
+class UnitConversionStepSerializer(serializers.ModelSerializer):
+    from_unit_name = serializers.CharField(source="from_unit.name", read_only=True)
+    to_unit_name = serializers.CharField(source="to_unit.name", read_only=True)
+
+    class Meta:
+        model = UnitConversionStep
+        fields = [
+            "id",
+            "group",
+            "from_unit",
+            "from_unit_name",
+            "to_unit",
+            "to_unit_name",
+            "factor",
+            "level",
+        ]
+
+
+class UnitConversionGroupSerializer(serializers.ModelSerializer):
+    base_unit_name = serializers.CharField(source="base_unit.name", read_only=True)
+    steps = UnitConversionStepSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = UnitConversionGroup
+        fields = [
+            "id",
+            "name",
+            "base_unit",
+            "base_unit_name",
+            "created_at",
+            "steps",
+        ]
+
+
 class SupplierSerializer(serializers.ModelSerializer):
     class Meta:
         model = Supplier
@@ -505,13 +581,10 @@ class InventoryCategorySerializer(serializers.ModelSerializer):
 
 
 class InventoryItemSerializer(serializers.ModelSerializer):
-    category_name = serializers.CharField(
-        source="category.name", read_only=True)
+    category_name = serializers.CharField(source="category.name", read_only=True)
     unit_name = serializers.CharField(source="unit.name", read_only=True)
-    supplier_name = serializers.CharField(
-        source="supplier.name", read_only=True)
-    status_display = serializers.CharField(
-        source="get_status_display", read_only=True)
+    supplier_name = serializers.CharField(source="supplier.name", read_only=True)
+    status_display = serializers.CharField(source="get_status_display", read_only=True)
     formatted_last_updated = serializers.CharField(read_only=True)
     stock_percentage = serializers.FloatField(read_only=True)
     is_low_stock = serializers.BooleanField(read_only=True)
@@ -603,8 +676,7 @@ class StockMovementSerializer(serializers.ModelSerializer):
 class AddStockSerializer(serializers.Serializer):
     """Serializer for adding stock to inventory items"""
 
-    quantity = serializers.DecimalField(
-        max_digits=10, decimal_places=2, min_value=0.01)
+    quantity = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=0.01)
     reason = serializers.CharField(
         max_length=200, required=False, default="Stock addition"
     )
@@ -613,8 +685,7 @@ class AddStockSerializer(serializers.Serializer):
         max_length=100, required=False, allow_blank=True
     )
     expiry_date = serializers.DateField(required=False, allow_null=True)
-    warranty_expiry_date = serializers.DateField(
-        required=False, allow_null=True)
+    warranty_expiry_date = serializers.DateField(required=False, allow_null=True)
 
 
 class InventoryStatsSerializer(serializers.Serializer):
@@ -682,7 +753,8 @@ class ProductSerialItemSerializer(serializers.ModelSerializer):
 
 class StockTransferItemSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(
-        source="product.name", read_only=True, default=None)
+        source="product.name", read_only=True, default=None
+    )
     variant_label = serializers.SerializerMethodField()
 
     class Meta:
@@ -753,8 +825,13 @@ class StockTransferSerializer(serializers.ModelSerializer):
             "updated_at",
             "items",
         ]
-        read_only_fields = ("id", "transfer_number",
-                            "completed_at", "created_at", "updated_at")
+        read_only_fields = (
+            "id",
+            "transfer_number",
+            "completed_at",
+            "created_at",
+            "updated_at",
+        )
 
 
 class StockSummaryPOSSerializer(serializers.ModelSerializer):
@@ -826,8 +903,8 @@ class StockSummaryPOSSerializer(serializers.ModelSerializer):
         base = getattr(obj.product, "name", "") or ""
         if obj.variant_id:
             parts = [
-                getattr(obj.variant, "size_name", None) or getattr(
-                    obj.variant, "size", None),
+                getattr(obj.variant, "size_name", None)
+                or getattr(obj.variant, "size", None),
                 getattr(obj.variant, "color", None),
             ]
             label = " / ".join(p for p in parts if p)
@@ -845,7 +922,8 @@ class StockSummaryPOSSerializer(serializers.ModelSerializer):
                 return size_code
             product_code = getattr(obj.product, "code", None)
             size = getattr(obj.variant, "size", None) or getattr(
-                obj.variant, "size_name", None)
+                obj.variant, "size_name", None
+            )
             if product_code and size:
                 return f"{product_code}_{size}"
         return getattr(obj.product, "code", None)
@@ -895,6 +973,7 @@ class StockSummaryPOSSerializer(serializers.ModelSerializer):
 
 class StockTransferCreateSerializer(serializers.ModelSerializer):
     """Write serializer: accepts nested items on creation."""
+
     items = StockTransferItemWriteSerializer(many=True)
 
     class Meta:

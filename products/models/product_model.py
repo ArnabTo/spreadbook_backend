@@ -178,12 +178,10 @@ class Product(Timestamp):
 
     name = models.CharField(max_length=100, null=True, blank=True)
     # NOTE: code is unique per company (not globally) to support multi-tenant catalogs.
-    code = models.CharField(max_length=20, null=True,
-                            blank=True, db_index=True)
+    code = models.CharField(max_length=20, null=True, blank=True, db_index=True)
     model = models.CharField(max_length=100, null=True, blank=True)
     sku = models.CharField(max_length=100, null=True, blank=True)
-    category = models.CharField(
-        max_length=100, default="", null=True, blank=True)
+    category = models.CharField(max_length=100, default="", null=True, blank=True)
 
     # MegaShop catalog helpers (optional; keeps existing APIs stable)
     category_ref = models.ForeignKey(
@@ -217,6 +215,26 @@ class Product(Timestamp):
 
     # Flexible extra fields (max variables without new migrations)
     extra = models.JSONField(default=dict, blank=True)
+
+    # Flexible unit-conversion system (replaces hard-coded dual-unit assumptions).
+    unit_conversion_group = models.ForeignKey(
+        "products.UnitConversionGroup",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_index=True,
+        related_name="products",
+        help_text="Conversion rule set used for this product (stock is stored in the group's base unit).",
+    )
+    display_unit = models.ForeignKey(
+        Unit,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_index=True,
+        related_name="display_products",
+        help_text="Preferred unit for UI/API display. StockSummary quantity remains stored in base unit.",
+    )
 
     # Stock threshold customization (default keeps current behavior)
     low_stock_threshold = models.PositiveIntegerField(default=20)
@@ -277,8 +295,7 @@ class Product(Timestamp):
     # content = RichTextField(blank=False, null=False)
     available = models.IntegerField(default=0)
 
-    unit = models.ForeignKey(
-        Unit, on_delete=models.CASCADE, blank=True, null=True)
+    unit = models.ForeignKey(Unit, on_delete=models.CASCADE, blank=True, null=True)
     # color = models.CharField(max_length=300, default="", blank=True, null=True)
     price = models.FloatField(default=0, blank=True, null=True)
     priceSale = models.FloatField(default=0, blank=True, null=True)
@@ -299,10 +316,8 @@ class Product(Timestamp):
 
     image = models.ImageField(upload_to=upload_to, blank=True, null=True)
     coverUrl = models.ImageField(upload_to=upload_to, blank=True, null=True)
-    barcode = models.ImageField(
-        upload_to=upload_to_barcode, blank=True, null=True)
-    qrcode = models.ImageField(
-        upload_to=upload_to_qrcode, blank=True, null=True)
+    barcode = models.ImageField(upload_to=upload_to_barcode, blank=True, null=True)
+    qrcode = models.ImageField(upload_to=upload_to_qrcode, blank=True, null=True)
 
     quantity = models.IntegerField(default=0)
     out_of_stock = models.BooleanField(default=False)
@@ -467,9 +482,11 @@ class Product(Timestamp):
         if not self.unique_code:
             import random as _random
             import string as _string
-            prefix = (self.name or 'PRD')[:3].upper().replace(' ', '')
-            suffix = ''.join(_random.choices(
-                _string.ascii_uppercase + _string.digits, k=8))
+
+            prefix = (self.name or "PRD")[:3].upper().replace(" ", "")
+            suffix = "".join(
+                _random.choices(_string.ascii_uppercase + _string.digits, k=8)
+            )
             self.unique_code = f"{prefix}-{suffix}"
 
         low_threshold = int(self.low_stock_threshold or 20)
@@ -525,12 +542,9 @@ class Product(Timestamp):
 
     class Meta:
         indexes = [
-            models.Index(fields=["companyId", "code"],
-                         name="idx_product_company_code"),
-            models.Index(fields=["companyId", "name"],
-                         name="idx_product_company_name"),
-            models.Index(fields=["companyId", "sku"],
-                         name="idx_product_company_sku"),
+            models.Index(fields=["companyId", "code"], name="idx_product_company_code"),
+            models.Index(fields=["companyId", "name"], name="idx_product_company_name"),
+            models.Index(fields=["companyId", "sku"], name="idx_product_company_sku"),
         ]
         constraints = [
             models.UniqueConstraint(
@@ -545,8 +559,7 @@ class Image(models.Model):
     product = models.ForeignKey(
         Product, related_name="images", on_delete=models.CASCADE, null=True
     )
-    picture = models.ImageField(
-        upload_to=upload_to_multi, null=True, blank=True)
+    picture = models.ImageField(upload_to=upload_to_multi, null=True, blank=True)
 
 
 class Tag(models.Model):
@@ -662,12 +675,14 @@ class ProductVariant(models.Model):
         if not self.unique_code:
             import random as _random
             import string as _string
-            prod_name = (self.product.name if self.product else 'VAR') or 'VAR'
-            prefix = prod_name[:3].upper().replace(' ', '')
-            size_part = (self.size or '')[:2].upper()
-            color_part = (self.color or '')[:2].upper()
-            suffix = ''.join(_random.choices(
-                _string.ascii_uppercase + _string.digits, k=6))
+
+            prod_name = (self.product.name if self.product else "VAR") or "VAR"
+            prefix = prod_name[:3].upper().replace(" ", "")
+            size_part = (self.size or "")[:2].upper()
+            color_part = (self.color or "")[:2].upper()
+            suffix = "".join(
+                _random.choices(_string.ascii_uppercase + _string.digits, k=6)
+            )
             self.unique_code = f"V{prefix}{size_part}{color_part}-{suffix}"
         super().save(*args, **kwargs)
 
@@ -783,18 +798,20 @@ class ProductSerialItem(models.Model):
     class Meta:
         ordering = ["created_at"]
         indexes = [
-            models.Index(fields=["product", "status"],
-                         name="idx_serial_product_status"),
-            models.Index(fields=["variant", "status"],
-                         name="idx_serial_variant_status"),
-            models.Index(fields=["warehouse", "status"],
-                         name="idx_serial_wh_status"),
+            models.Index(
+                fields=["product", "status"], name="idx_serial_product_status"
+            ),
+            models.Index(
+                fields=["variant", "status"], name="idx_serial_variant_status"
+            ),
+            models.Index(fields=["warehouse", "status"], name="idx_serial_wh_status"),
         ]
 
     def save(self, *args, **kwargs):
         if not self.serial_code:
             import random as _random
             import string as _string
+
             # Build prefix from variant code or product code
             if self.variant and self.variant.unique_code:
                 base = self.variant.unique_code
@@ -802,13 +819,61 @@ class ProductSerialItem(models.Model):
                 base = self.product.unique_code
             else:
                 base = "SER"
-            suffix = ''.join(_random.choices(
-                _string.digits + _string.ascii_uppercase, k=6))
+            suffix = "".join(
+                _random.choices(_string.digits + _string.ascii_uppercase, k=6)
+            )
             self.serial_code = f"{base}-{suffix}"
         super().save(*args, **kwargs)
 
     def __str__(self):
         return self.serial_code
+
+
+class UnitConversionGroup(models.Model):
+    name = models.CharField(
+        max_length=100,
+        help_text="Example: Medicine Box-Strip-Tablet",
+    )
+    base_unit = models.ForeignKey(
+        Unit,
+        on_delete=models.PROTECT,
+        related_name="base_groups",
+        help_text="Canonical storage unit for stock (StockSummary.quantity is saved in this unit).",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
+class UnitConversionStep(models.Model):
+    group = models.ForeignKey(
+        UnitConversionGroup,
+        on_delete=models.CASCADE,
+        related_name="steps",
+    )
+    from_unit = models.ForeignKey(
+        Unit,
+        on_delete=models.PROTECT,
+        related_name="conversion_steps_from",
+    )
+    to_unit = models.ForeignKey(
+        Unit,
+        on_delete=models.PROTECT,
+        related_name="conversion_steps_to",
+    )
+    factor = models.PositiveIntegerField()
+    level = models.PositiveSmallIntegerField()
+
+    class Meta:
+        unique_together = [("group", "from_unit")]
+        ordering = ["level"]
+
+    def __str__(self):
+        return f"{self.group.name}: {self.from_unit} -> {self.to_unit} x {self.factor}"
 
 
 class StockSummary(models.Model):
@@ -929,13 +994,15 @@ class StockSummary(models.Model):
 
 # ── Signal: auto-recalculate Product.in_stock on StockSummary change ─────────
 
+
 def _recalculate_product_in_stock(product_id):
     """Sum all StockSummary.quantity rows for product and update Product.in_stock."""
     from django.db.models import Sum
+
     total = (
-        StockSummary.objects
-        .filter(product_id=product_id)
-        .aggregate(total=Sum("quantity"))["total"]
+        StockSummary.objects.filter(product_id=product_id).aggregate(
+            total=Sum("quantity")
+        )["total"]
     ) or 0
     Product.objects.filter(pk=product_id).update(in_stock=total)
 

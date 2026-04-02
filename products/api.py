@@ -11,7 +11,19 @@ from django.db.models import Q, Prefetch
 from django.db import transaction
 
 from .models.category_model import Category
-from .models.product_model import Product, Image, NewLabel, SaleLabel, Size, Color, ProductVariant, ProductSerialItem, StockSummary
+from .models.product_model import (
+    Product,
+    Image,
+    NewLabel,
+    SaleLabel,
+    Size,
+    Color,
+    ProductVariant,
+    ProductSerialItem,
+    StockSummary,
+    UnitConversionGroup,
+    UnitConversionStep,
+)
 from .models import ProductType, GenericName, Brand, ProductBarcode, ProductBatch
 from .models.stock_transfer_model import StockTransfer, StockTransferItem
 from .models.unit_model import Unit
@@ -33,6 +45,7 @@ from .serializers import (
     ProductBatchSerializer,
 )
 from .serializers import UnitSerializer
+from .serializers import UnitConversionGroupSerializer, UnitConversionStepSerializer
 
 
 from rest_framework import generics
@@ -55,7 +68,11 @@ from products.branch_inventory import (
 )
 
 from .models.inventory_model import ProductStockMovement
-from .serializers import AddStockSerializer, ProductStockMovementSerializer, ProductSerialItemSerializer
+from .serializers import (
+    AddStockSerializer,
+    ProductStockMovementSerializer,
+    ProductSerialItemSerializer,
+)
 from .serializers import StockTransferSerializer, StockTransferCreateSerializer
 from .serializers import StockSummaryPOSSerializer
 
@@ -112,8 +129,7 @@ class UnitViewSet(viewsets.ModelViewSet):
     """CRUD for Unit.  Used by the frontend Add-Product form to create missing units."""
 
     serializer_class = UnitSerializer
-    http_method_names = ["get", "post", "patch",
-                         "put", "delete", "head", "options"]
+    http_method_names = ["get", "post", "patch", "put", "delete", "head", "options"]
 
     def get_queryset(self):
         return Unit.objects.all().order_by("name")
@@ -134,6 +150,36 @@ class UnitViewSet(viewsets.ModelViewSet):
 
         unit = Unit.objects.create(name=name, status=True)
         return Response(UnitSerializer(unit).data, status=status.HTTP_201_CREATED)
+
+
+class UnitConversionGroupViewSet(viewsets.ModelViewSet):
+    """CRUD for reusable unit conversion rule groups."""
+
+    serializer_class = UnitConversionGroupSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    http_method_names = ["get", "post", "patch", "put", "delete", "head", "options"]
+
+    def get_queryset(self):
+        return (
+            UnitConversionGroup.objects.select_related("base_unit")
+            .prefetch_related("steps", "steps__from_unit", "steps__to_unit")
+            .order_by("name")
+        )
+
+
+class UnitConversionStepViewSet(viewsets.ModelViewSet):
+    """CRUD for conversion steps inside a unit conversion group."""
+
+    serializer_class = UnitConversionStepSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    http_method_names = ["get", "post", "patch", "put", "delete", "head", "options"]
+
+    def get_queryset(self):
+        qs = UnitConversionStep.objects.select_related("group", "from_unit", "to_unit")
+        group_id = self.request.query_params.get("group")
+        if group_id:
+            qs = qs.filter(group_id=group_id)
+        return qs.order_by("group_id", "level")
 
 
 class CategoryViewSet(viewsets.ModelViewSet):
@@ -185,8 +231,7 @@ class CategoryViewSet(viewsets.ModelViewSet):
         }:
             raise PermissionDenied("You do not have access to this branch")
 
-        branch = Branch.objects.select_related(
-            "company").filter(id=branch_id).first()
+        branch = Branch.objects.select_related("company").filter(id=branch_id).first()
         if not branch:
             raise PermissionDenied("Invalid branch_id")
 
@@ -225,8 +270,7 @@ class CategoryViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         """Auto-assign company from selected branch, fallback to authenticated user company"""
         user = self.request.user
-        company = self._resolve_company_from_branch(
-            user) or self._resolve_company(user)
+        company = self._resolve_company_from_branch(user) or self._resolve_company(user)
 
         if not company:
             raise PermissionDenied(
@@ -301,9 +345,8 @@ class GenericNameViewSet(viewsets.ModelViewSet):
         from company.models import Branch
         from rest_framework.exceptions import PermissionDenied
 
-        branch_id = (
-            self.request.query_params.get("branch_id")
-            or self.request.data.get("branch_id")
+        branch_id = self.request.query_params.get("branch_id") or self.request.data.get(
+            "branch_id"
         )
         if not branch_id:
             return None
@@ -312,14 +355,13 @@ class GenericNameViewSet(viewsets.ModelViewSet):
         if not is_unrestricted_user(user):
             allowed = set()
             if hasattr(user, "branchAccess") and user.branchAccess.exists():
-                allowed = set(str(b)
-                              for b in user.branchAccess.values_list("id", flat=True))
+                allowed = set(
+                    str(b) for b in user.branchAccess.values_list("id", flat=True)
+                )
                 if allowed and str(branch_id) not in allowed:
-                    raise PermissionDenied(
-                        "You do not have access to this branch")
+                    raise PermissionDenied("You do not have access to this branch")
 
-        branch = Branch.objects.select_related(
-            "company").filter(id=branch_id).first()
+        branch = Branch.objects.select_related("company").filter(id=branch_id).first()
         if branch:
             return branch.company
         return None
@@ -428,8 +470,7 @@ class ProductBatchViewSet(viewsets.ModelViewSet):
     ordering = ["exp_date", "-receivedAt"]
 
     def get_queryset(self):
-        qs = ProductBatch.objects.select_related(
-            "product", "branch", "supplier").all()
+        qs = ProductBatch.objects.select_related("product", "branch", "supplier").all()
         return apply_company_branch_scope(
             request=self.request,
             queryset=qs,
@@ -447,8 +488,7 @@ class ProductViewSet(viewsets.ModelViewSet):
     """
 
     serializer_class = ProductSerializer
-    parser_classes = (parsers.MultiPartParser,
-                      parsers.FormParser, parsers.JSONParser)
+    parser_classes = (parsers.MultiPartParser, parsers.FormParser, parsers.JSONParser)
     pagination_class = ProductPagination
     filter_backends = [
         DjangoFilterBackend,
@@ -493,8 +533,7 @@ class ProductViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = (
-            Product.objects.select_related(
-                "unit", "supplier", "generic_name", "brand")
+            Product.objects.select_related("unit", "supplier", "generic_name", "brand")
             .only(
                 "id",
                 "name",
@@ -584,8 +623,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                 not allowed_company_ids
                 or str(requested_company_id) not in allowed_company_ids
             ):
-                raise PermissionDenied(
-                    "You do not have access to this company")
+                raise PermissionDenied("You do not have access to this company")
             qs = qs.filter(companyId_id=requested_company_id)
 
         if branch_id:
@@ -604,8 +642,7 @@ class ProductViewSet(viewsets.ModelViewSet):
             qs = qs.filter(location_status=location_status)
 
         # Filter by transaction_status (unsold/sold/returned/rejected)
-        transaction_status = self.request.query_params.get(
-            "transaction_status")
+        transaction_status = self.request.query_params.get("transaction_status")
         if transaction_status:
             qs = qs.filter(transaction_status=transaction_status)
 
@@ -621,10 +658,8 @@ class ProductViewSet(viewsets.ModelViewSet):
         is automatically created.
         """
         user = getattr(self.request, "user", None)
-        req_data = self.request.data if isinstance(
-            self.request.data, dict) else {}
-        warehouse_id = req_data.get(
-            "warehouse_id") or req_data.get("warehouseId")
+        req_data = self.request.data if isinstance(self.request.data, dict) else {}
+        warehouse_id = req_data.get("warehouse_id") or req_data.get("warehouseId")
         company_id = req_data.get("company_id") or req_data.get("companyId")
 
         # Resolve company
@@ -648,7 +683,8 @@ class ProductViewSet(viewsets.ModelViewSet):
                         product = serializer.save(companyId_id=company_id_val)
                     if warehouse_id:
                         self._auto_create_purchase_order(
-                            product, warehouse_id, company_id or company_id_val, user)
+                            product, warehouse_id, company_id or company_id_val, user
+                        )
                     return
 
         extra_kwargs = {}
@@ -666,10 +702,10 @@ class ProductViewSet(viewsets.ModelViewSet):
             product = serializer.save(**extra_kwargs)
 
         if warehouse_id:
-            resolved_company_id = company_id or (
-                company.pk if company else None)
+            resolved_company_id = company_id or (company.pk if company else None)
             self._auto_create_purchase_order(
-                product, warehouse_id, resolved_company_id, user)
+                product, warehouse_id, resolved_company_id, user
+            )
 
     def _auto_create_purchase_order(self, product, warehouse_id, company_id, user):
         """Auto-create a PurchaseOrder with status=pending when a product is added to warehouse."""
@@ -677,8 +713,9 @@ class ProductViewSet(viewsets.ModelViewSet):
         from decimal import Decimal
 
         actor = (
-            user.username if user and getattr(
-                user, "is_authenticated", False) else "System"
+            user.username
+            if user and getattr(user, "is_authenticated", False)
+            else "System"
         )
 
         try:
@@ -698,11 +735,17 @@ class ProductViewSet(viewsets.ModelViewSet):
                             product=product,
                             variant=variant,
                             name=f"{product.name} ({variant.size or ''}{variant.color or ''})".strip(
-                                " ()"),
+                                " ()"
+                            ),
                             quantity=max(int(variant.size_qty or 1), 1),
                             unit="pcs",
                             unit_price=Decimal(
-                                str(variant.supplier_price or product.supplier_price or 0)),
+                                str(
+                                    variant.supplier_price
+                                    or product.supplier_price
+                                    or 0
+                                )
+                            ),
                             variant_size=variant.size or "",
                             variant_color=variant.color or "",
                             variant_unique_code=variant.unique_code or "",
@@ -720,6 +763,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         except Exception as exc:
             # Log but don't fail the product creation
             import logging
+
             logging.getLogger(__name__).warning(
                 "Failed to auto-create PO for product %s: %s", product.pk, exc
             )
@@ -739,8 +783,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                     user.branchAccess.values_list("company_id", flat=True)
                 )
                 if len(company_ids) == 1:
-                    saved = serializer.save(
-                        companyId_id=next(iter(company_ids)))
+                    saved = serializer.save(companyId_id=next(iter(company_ids)))
                 else:
                     saved = serializer.save(companyId=company)
             else:
@@ -805,8 +848,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                 "model",
                 "coverUrl",
                 "image",
-                "size"
-                "subDescription",
+                "size" "subDescription",
                 "unit",
                 "price",
                 "priceSale",
@@ -934,8 +976,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                 product,
                 branch,
                 delta=qty_int,
-                reason=serializer.validated_data.get(
-                    "reason", "Stock addition"),
+                reason=serializer.validated_data.get("reason", "Stock addition"),
                 notes=serializer.validated_data.get("notes", ""),
                 updated_by=request.user,
             )
@@ -960,11 +1001,9 @@ class ProductViewSet(viewsets.ModelViewSet):
                 quantity=qty,
                 previous_stock=Decimal(prev),
                 new_stock=Decimal(new),
-                reason=serializer.validated_data.get(
-                    "reason", "Stock addition"),
+                reason=serializer.validated_data.get("reason", "Stock addition"),
                 notes=serializer.validated_data.get("notes", ""),
-                reference_number=serializer.validated_data.get(
-                    "reference_number", ""),
+                reference_number=serializer.validated_data.get("reference_number", ""),
                 created_by=(
                     request.user.username
                     if request.user and request.user.is_authenticated
@@ -1000,8 +1039,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                 product,
                 branch,
                 delta=-actual,
-                reason=serializer.validated_data.get(
-                    "reason", "Stock reduction"),
+                reason=serializer.validated_data.get("reason", "Stock reduction"),
                 notes=serializer.validated_data.get("notes", ""),
                 updated_by=request.user,
             )
@@ -1027,11 +1065,9 @@ class ProductViewSet(viewsets.ModelViewSet):
                 quantity=Decimal(actual),
                 previous_stock=Decimal(prev),
                 new_stock=Decimal(new),
-                reason=serializer.validated_data.get(
-                    "reason", "Stock reduction"),
+                reason=serializer.validated_data.get("reason", "Stock reduction"),
                 notes=serializer.validated_data.get("notes", ""),
-                reference_number=serializer.validated_data.get(
-                    "reference_number", ""),
+                reference_number=serializer.validated_data.get("reference_number", ""),
                 created_by=(
                     request.user.username
                     if request.user and request.user.is_authenticated
@@ -1056,8 +1092,7 @@ class ProductViewSet(viewsets.ModelViewSet):
 
 class ProductPostSet(viewsets.ModelViewSet):
     serializer_class = ProductPostSerializer
-    parser_classes = (parsers.MultiPartParser,
-                      parsers.FormParser, parsers.JSONParser)
+    parser_classes = (parsers.MultiPartParser, parsers.FormParser, parsers.JSONParser)
 
     def _resolve_company_for_user(self):
         user = getattr(self.request, "user", None)
@@ -1069,8 +1104,7 @@ class ProductPostSet(viewsets.ModelViewSet):
             return company
 
         if hasattr(user, "branchAccess"):
-            company_ids = set(user.branchAccess.values_list(
-                "company_id", flat=True))
+            company_ids = set(user.branchAccess.values_list("company_id", flat=True))
             if len(company_ids) == 1:
                 from company.models import Company
 
@@ -1130,8 +1164,7 @@ class ProductPostSet(viewsets.ModelViewSet):
                 )
                 return
             raise PermissionDenied("User is not associated with a company")
-        serializer.save(companyId=company,
-                        branch=self._resolve_branch_for_user())
+        serializer.save(companyId=company, branch=self._resolve_branch_for_user())
 
     def perform_update(self, serializer):
         user = getattr(self.request, "user", None)
@@ -1199,8 +1232,7 @@ class ProductPostSet(viewsets.ModelViewSet):
             new_stock=Decimal(new),
             reason=serializer.validated_data.get("reason", "Stock addition"),
             notes=serializer.validated_data.get("notes", ""),
-            reference_number=serializer.validated_data.get(
-                "reference_number", ""),
+            reference_number=serializer.validated_data.get("reference_number", ""),
             created_by=(
                 request.user.username
                 if request.user and request.user.is_authenticated
@@ -1250,8 +1282,7 @@ class ProductPostSet(viewsets.ModelViewSet):
             new_stock=Decimal(new),
             reason=serializer.validated_data.get("reason", "Stock reduction"),
             notes=serializer.validated_data.get("notes", ""),
-            reference_number=serializer.validated_data.get(
-                "reference_number", ""),
+            reference_number=serializer.validated_data.get("reference_number", ""),
             created_by=(
                 request.user.username
                 if request.user and request.user.is_authenticated
@@ -1281,6 +1312,7 @@ class ProductSerialItemViewSet(viewsets.ModelViewSet):
       POST serial-items/<id>/scan/                  — record a scan + update status
       POST serial-items/generate/                   — bulk-create N serial items
     """
+
     serializer_class = ProductSerialItemSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -1300,8 +1332,7 @@ class ProductSerialItemViewSet(viewsets.ModelViewSet):
         if p.get("branch_id") or p.get("branch"):
             qs = qs.filter(branch_id=p.get("branch_id") or p.get("branch"))
         if p.get("barcode") or p.get("serial_code"):
-            qs = qs.filter(serial_code=p.get("barcode")
-                           or p.get("serial_code"))
+            qs = qs.filter(serial_code=p.get("barcode") or p.get("serial_code"))
         if p.get("company"):
             qs = qs.filter(product__companyId_id=p["company"])
         return qs
@@ -1316,8 +1347,9 @@ class ProductSerialItemViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         item = (
-            ProductSerialItem.objects
-            .select_related("product", "variant__product", "warehouse", "branch")
+            ProductSerialItem.objects.select_related(
+                "product", "variant__product", "warehouse", "branch"
+            )
             .filter(serial_code=code)
             .first()
         )
@@ -1334,6 +1366,7 @@ class ProductSerialItemViewSet(viewsets.ModelViewSet):
     def scan(self, request, pk=None):
         """Record a scan timestamp and optionally update status, condition, notes."""
         from django.utils.timezone import now as tz_now
+
         item = self.get_object()
         item.last_scanned_at = tz_now()
         update_fields = ["last_scanned_at", "updated_at"]
@@ -1374,8 +1407,9 @@ class ProductSerialItemViewSet(viewsets.ModelViewSet):
         product = None
         if variant_id:
             try:
-                variant = ProductVariant.objects.select_related(
-                    "product").get(id=variant_id)
+                variant = ProductVariant.objects.select_related("product").get(
+                    id=variant_id
+                )
                 product = variant.product
             except ProductVariant.DoesNotExist:
                 return Response(
@@ -1492,8 +1526,7 @@ class PosProductIndexView(APIView):
                 not allowed_company_ids
                 or str(requested_company_id) not in allowed_company_ids
             ):
-                raise PermissionDenied(
-                    "You do not have access to this company")
+                raise PermissionDenied("You do not have access to this company")
             qs = qs.filter(companyId_id=requested_company_id)
 
         updated_since = request.query_params.get(
@@ -1549,8 +1582,9 @@ class POSCatalogView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        branch_id = request.query_params.get(
-            "branch_id") or request.query_params.get("branchId")
+        branch_id = request.query_params.get("branch_id") or request.query_params.get(
+            "branchId"
+        )
         if not branch_id:
             return Response(
                 {"success": False, "error": "branch_id is required"},
@@ -1570,7 +1604,8 @@ class POSCatalogView(APIView):
 
         qs = (
             StockSummary.objects.filter(
-                branch_id=branch_id, location="in_branch",
+                branch_id=branch_id,
+                location="in_branch",
             )
             .select_related("product", "variant")
             .order_by("product__name", "variant__size")
@@ -1591,15 +1626,14 @@ class POSCatalogView(APIView):
 
         try:
             page = max(1, int(request.query_params.get("page", 1)))
-            page_size = min(
-                200, max(1, int(request.query_params.get("page_size", 80))))
+            page_size = min(200, max(1, int(request.query_params.get("page_size", 80))))
         except (ValueError, TypeError):
             page = 1
             page_size = 80
 
         total = qs.count()
         offset = (page - 1) * page_size
-        items = qs[offset: offset + page_size]
+        items = qs[offset : offset + page_size]
         has_next = (offset + page_size) < total
 
         serializer = StockSummaryPOSSerializer(items, many=True)
@@ -1625,6 +1659,7 @@ class StockTransferViewSet(viewsets.ModelViewSet):
     POST /api/stock-transfers/<id>/complete/ — execute transfer
     POST /api/stock-transfers/<id>/cancel/   — cancel transfer
     """
+
     permission_classes = [permissions.IsAuthenticated]
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
@@ -1679,7 +1714,9 @@ class StockTransferViewSet(viewsets.ModelViewSet):
         transfer = self.get_object()
         if transfer.status not in ("draft", "in_transit"):
             return Response(
-                {"detail": f"Cannot cancel a transfer with status '{transfer.status}'."},
+                {
+                    "detail": f"Cannot cancel a transfer with status '{transfer.status}'."
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
         transfer.status = "cancelled"

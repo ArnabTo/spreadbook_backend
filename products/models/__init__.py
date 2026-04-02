@@ -1,7 +1,14 @@
 __author__ = "Raktch"
 
 from .category_model import Category
-from .product_model import Product, ProductVariant, ProductSerialItem, StockSummary
+from .product_model import (
+    Product,
+    ProductVariant,
+    ProductSerialItem,
+    StockSummary,
+    UnitConversionGroup,
+    UnitConversionStep,
+)
 from .unit_model import Unit
 from .inventory_model import (
     InventoryItem,
@@ -27,6 +34,8 @@ __all__ = [
     "ProductVariant",
     "ProductSerialItem",
     "StockSummary",
+    "UnitConversionGroup",
+    "UnitConversionStep",
     "Unit",
     "InventoryItem",
     "InventoryCategory",

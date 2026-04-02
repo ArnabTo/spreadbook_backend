@@ -1,0 +1,11 @@
+name,code,sku,priceSale,regular_price,supplier_price,quantity,category,generic_name,brand_name,companyId,branch,unit_conversion_group,location_type,location_id,stock_quantity,description,weight,color,country
+Paracetamol 500mg Tablet,PARA-500,SKU001,45.00,55.00,35.00,100,Pain Relief,Paracetamol,Napa,Company ABC,,Medicine Box-Strip-Tablet,warehouse,1,5000,Effective pain reliever and fever reducer,0.5,,Bangladesh
+Ibuprofen 400mg Tablet,IBU-400,SKU002,60.00,75.00,40.00,80,Pain Relief,Ibuprofen,Brufen,Company ABC,,Tablet Box-Strip-Tablet,warehouse,1,3000,Anti-inflammatory medication,0.6,,India
+Amoxicillin 500mg Capsule,AMOX-500,SKU003,80.00,100.00,50.00,50,Antibiotic,Amoxicillin,Amoxil,Company ABC,,Capsule Box-Strip-Capsule,warehouse,1,2000,Broad-spectrum antibiotic,0.7,,India
+Cetirizine 10mg Tablet,CETI-10,SKU004,30.00,40.00,20.00,120,Allergy,Cetirizine,Zetirizine,Company ABC,Branch-01,Tablet Box-Strip-Tablet,branch,2,1000,Antihistamine for allergies,0.4,,Bangladesh
+Vitamin C 1000mg Tablet,VITC-1000,SKU005,25.00,30.00,15.00,200,Vitamins,Vitamin C,Ascorbic,Company ABC,,Tablet Box-Strip-Tablet,warehouse,1,8000,Immune system support,0.3,,China
+Metformin 500mg Tablet,METF-500,SKU006,35.00,45.00,25.00,150,Diabetes,Metformin,,Company ABC,Branch-02,,,,Diabetes management,0.5,,India
+Aspirin 100mg Tablet,ASPI-100,SKU007,20.00,25.00,15.00,300,Pain Relief,Aspirin,Aspro,Company ABC,,Tablet Box-Strip-Tablet,warehouse,1,6000,Antiplatelet agent,0.2,,USA
+Omeprazole 20mg Capsule,OMEP-20,SKU008,70.00,90.00,45.00,75,GastroIntestinal,Omeprazole,Prilosec,Company ABC,,Capsule Box-Strip-Capsule,branch,2,1500,Acid reflux treatment,0.4,,India
+Atorvastatin 10mg Tablet,ATOR-10,SKU009,55.00,70.00,38.00,100,Cardiovascular,Atorvastatin,Lipitor,Company ABC,,Tablet Box-Strip-Tablet,warehouse,1,4000,Cholesterol management,0.3,,USA
+Simvastatin 20mg Tablet,SIMV-20,SKU010,65.00,80.00,42.00,90,Cardiovascular,Simvastatin,Zocor,Company ABC,,Tablet Box-Strip-Tablet,warehouse,1,3500,Lipid lowering agent,0.35,,USA
