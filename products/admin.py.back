@@ -47,8 +47,7 @@ class GenericNameByNameOrCreateWidget(ForeignKeyWidget):
             return self.cache[value]
 
         existing = (
-            GenericName.objects.filter(
-                name__iexact=value).order_by("createdAt").first()
+            GenericName.objects.filter(name__iexact=value).order_by("createdAt").first()
         )
         if existing:
             self.cache[value] = existing
@@ -116,8 +115,7 @@ class UnitConversionGroupByNameWidget(ForeignKeyWidget):
             return None
         key = value.lower()
         if key not in self._cache:
-            obj = UnitConversionGroup.objects.filter(
-                name__iexact=value).first()
+            obj = UnitConversionGroup.objects.filter(name__iexact=value).first()
             # Fallback: try numeric PK (ID)
             if obj is None and value.isdigit():
                 obj = UnitConversionGroup.objects.filter(pk=int(value)).first()
@@ -151,8 +149,8 @@ class WarehouseByNameOrCodeWidget(ForeignKeyWidget):
 class UnitByNameOrIdWidget(ForeignKeyWidget):
     """Look up Unit by name or ID (case-insensitive)."""
 
-    def __init__(self, model, field="name", *args, **kwargs):
-        super().__init__(model, field, *args, **kwargs)
+    def __init__(self, *args, **kwargs):
+        super().__init__(Unit, "name", *args, **kwargs)
         self._cache = {}
 
     def clean(self, value, row=None, *args, **kwargs):
@@ -173,8 +171,8 @@ class UnitByNameOrIdWidget(ForeignKeyWidget):
 class DisplayUnitByNameOrIdWidget(ForeignKeyWidget):
     """Look up Unit by name or ID for display_unit field (case-insensitive)."""
 
-    def __init__(self, model, field="name", *args, **kwargs):
-        super().__init__(model, field, *args, **kwargs)
+    def __init__(self, *args, **kwargs):
+        super().__init__(Unit, "name", *args, **kwargs)
         self._cache = {}
 
     def clean(self, value, row=None, *args, **kwargs):
@@ -193,19 +191,7 @@ class DisplayUnitByNameOrIdWidget(ForeignKeyWidget):
 
 
 class ProductImportResource(resources.ModelResource):
-    """
-    Enhanced resource for importing products with proper field mappings and
-    bulk StockSummary creation using atomic transactions.
-
-    Features:
-    - Maps stock_quantity → in_stock
-    - Proper price field parsing (handles strings with currency symbols)
-    - Supports unit, display_unit, unit_conversion_group by name or ID
-    - Bulk creates StockSummary records with atomic transactions
-    - Recalculates in_stock from StockSummary aggregates
-    """
-
-    # Foreign key lookups
+    # foreignkey fields handling
     generic_name = fields.Field(
         attribute="generic_name",
         column_name="generic_name",
@@ -221,51 +207,30 @@ class ProductImportResource(resources.ModelResource):
         column_name="branch",
         widget=BranchByNameOrCodeWidget(),
     )
-
-    # Unit fields
-    unit = fields.Field(
-        attribute="unit",
-        column_name="unit",
-        widget=UnitByNameOrIdWidget(Unit, "name"),
-    )
-    display_unit = fields.Field(
-        attribute="display_unit",
-        column_name="display_unit",
-        widget=UnitByNameOrIdWidget(Unit, "name"),
-    )
-
+    
     # Unit conversion and stock fields
     unit_conversion_group = fields.Field(
         attribute="unit_conversion_group",
         column_name="unit_conversion_group",
         widget=UnitConversionGroupByNameWidget(),
     )
-    low_stock_threshold = fields.Field(
-        attribute="low_stock_threshold",
-        column_name="low_stock_threshold",
-    )
-
-    # Stock location data (for StockSummary creation)
     location_type = fields.Field(
         attribute="location_type",
         column_name="location_type",
-    )
+    )  # "warehouse" or "branch"
     location_id = fields.Field(
         attribute="location_id",
         column_name="location_id",
-    )
+    )  # ID of warehouse or branch
     stock_quantity = fields.Field(
         attribute="stock_quantity",
         column_name="stock_quantity",
-    )
-
+    )  # Initial stock quantity
+    
     HEADER_ALIASES = {
-        # Generic/brand
         "brand name": "brand_name",
-        "brand": "brand_name",
+        "dosage form": "dosage_form",
         "generic": "generic_name",
-        "generic name": "generic_name",
-        # Company/branch
         "company": "companyId",
         "company name": "companyId",
         "company id": "companyId",
@@ -275,59 +240,60 @@ class ProductImportResource(resources.ModelResource):
         "branch code": "branch",
         "branchid": "branch",
         "branch id": "branch",
-        # Units
-        "unit": "unit",
-        "primary unit": "unit",
-        "unit name": "unit",
-        "display unit": "display_unit",
-        # Unit conversion
-        "unit conversion": "unit_conversion_group",
-        "unit conversion group": "unit_conversion_group",
-        "conversion group": "unit_conversion_group",
-        # Stock & inventory
-        "stock": "stock_quantity",
-        "stock quantity": "stock_quantity",
-        "initial stock": "stock_quantity",
-        "in stock": "in_stock",
-        "in_stock": "in_stock",
-        "low stock threshold": "low_stock_threshold",
-        "low stock": "low_stock_threshold",
-        "low_stock_threshold": "low_stock_threshold",
-        "quantity": "quantity",
-        "max quantity": "quantity",
-        "location type": "location_type",
-        "location": "location_type",
-        "location id": "location_id",
-        "warehouse id": "location_id",
-        "branch id": "location_id",
-        # Pricing
-        "price": "price",
-        "unit price": "price",
-        "price sale": "priceSale",
-        "sale price": "priceSale",
-        "priceSale": "priceSale",
-        "regular price": "regular_price",
-        "supplier price": "supplier_price",
-        "mrp": "mrp",
-        # Other
+        "weight": "weight",
         "manufacturer": "manufacturer",
-        "dosage form": "dosage_form",
+        "unit price": "price",
         "name": "name",
         "code": "code",
         "sku": "sku",
         "category": "category",
+        "quantity": "quantity",
+        "in stock": "in_stock",
+        "supplier price": "supplier_price",
+        "regular price": "regular_price",
+        "price sale": "priceSale",
         "description": "description",
         "country": "country",
         "gender": "gender",
         "publish": "publish",
         "taxes": "taxes",
         "inventory type": "inventoryType",
-        "weight": "weight",
+        "total ratings": "totalRatings",
+        "total sold": "totalSold",
+        "total reviews": "totalReviews",
+        "available": "available",
+        "sub description": "subDescription",
         "size": "size",
         "color": "color",
+        "height": "height",
+        "shape": "shape",
+        "material type": "material_type",
+        "technology": "technology",
+        "uses for product": "uses_for_product",
         "mfg date": "mfg_date",
         "exp date": "exp_date",
+        "prescription required": "prescription_required",
+        "controlled substance": "controlled_substance",
         "strength": "strength",
+        "mrp": "mrp",
+        "status": "status",
+        "count sold": "count_sold",
+        "recently sold": "recently_sold",
+        "recently added": "recently_added",
+        "recently viewed": "recently_viewed",
+        "recently updated": "recently_updated",
+        # Stock and unit conversion aliases
+        "unit conversion": "unit_conversion_group",
+        "unit conversion group": "unit_conversion_group",
+        "conversion group": "unit_conversion_group",
+        "location type": "location_type",
+        "location": "location_type",
+        "location id": "location_id",
+        "warehouse id": "location_id",
+        "branch id": "location_id",
+        "stock": "stock_quantity",
+        "stock quantity": "stock_quantity",
+        "initial stock": "stock_quantity",
     }
 
     class Meta:
@@ -347,13 +313,39 @@ class ProductImportResource(resources.ModelResource):
             "taxes",
             "in_stock",
             "quantity",
+            "available",
+            "totalSold",
+            "totalRatings",
+            "totalReviews",
+            "country",
+            "gender",
+            "publish",
+            "inventoryType",
+            "subDescription",
+            "dosage_form",
+            "strength",
+            "weight",
+            "size",
+            "color",
+            "height",
+            "shape",
+            "material_type",
+            "technology",
+            "uses_for_product",
+            "mfg_date",
+            "exp_date",
+            "prescription_required",
+            "controlled_substance",
+            "mrp",
+            "status",
+            "count_sold",
+            "recently_sold",
+            "recently_added",
+            "recently_viewed",
+            "recently_updated",
             "generic_name",
             "companyId",
             "branch",
-            "unit",
-            "display_unit",
-            "unit_conversion_group",
-            "low_stock_threshold",
         )
         import_id_fields = []
         use_bulk = True
@@ -363,18 +355,15 @@ class ProductImportResource(resources.ModelResource):
 
     @classmethod
     def _normalize_header(cls, header):
-        """Normalize header text for comparison."""
         if not isinstance(header, str):
             return ""
         return " ".join(header.replace("_", " ").strip().split()).lower()
 
     @staticmethod
     def _has_value(value):
-        """Check if a value is non-empty."""
         return value is not None and str(value).strip() != ""
 
     def before_import(self, dataset, using_transactions, dry_run, **kwargs):
-        """Normalize headers and pre-create shared references."""
         if not dataset.headers:
             return
 
@@ -387,7 +376,7 @@ class ProductImportResource(resources.ModelResource):
             normalized_headers.append(mapped_field)
         dataset.headers = normalized_headers
 
-        # Pre-create GenericName objects in bulk
+        # Pre-create GenericName objects in bulk for better performance
         generic_index = None
         try:
             generic_index = normalized_headers.index("generic_name")
@@ -395,11 +384,8 @@ class ProductImportResource(resources.ModelResource):
             pass
 
         if generic_index is not None:
-            existing_generics = set(
-                GenericName.objects.values_list("name", flat=True)
-            )
+            existing_generics = set(GenericName.objects.values_list("name", flat=True))
             generics_to_create = set()
-
             for row in dataset:
                 value = (row[generic_index] or "").strip()
                 if (
@@ -411,247 +397,108 @@ class ProductImportResource(resources.ModelResource):
 
             if generics_to_create:
                 GenericName.objects.bulk_create(
-                    [GenericName(name=name) for name in generics_to_create],
-                    ignore_conflicts=True
+                    [GenericName(name=name) for name in generics_to_create]
                 )
-                print(
-                    f"✓ Pre-created {len(generics_to_create)} GenericName objects")
+                print(f"Pre-created {len(generics_to_create)} GenericName objects")
 
     def before_import_row(self, row, **kwargs):
         """
         Clean and validate row data before import.
-        - Map stock_quantity → in_stock
-        - Clean price fields
-        - Set low_stock_threshold
-        - Validate critical fields
+        Allows products to be created even if optional fields are missing.
+        Only requires minimal critical fields (name or code).
         """
-
-        # Stock quantity mapping
-        stock_quantity = row.get("stock_quantity")
-        if stock_quantity is not None:
-            try:
-                stock_val = int(str(stock_quantity).strip()
-                                ) if stock_quantity else 0
-                row["in_stock"] = max(0, stock_val)
-                row["_import_stock_quantity"] = max(0, stock_val)
-            except (ValueError, AttributeError, TypeError):
-                row["in_stock"] = 0
-                row["_import_stock_quantity"] = 0
-
-        # Quantity (max capacity)
-        quantity = row.get("quantity")
-        if not self._has_value(quantity):
-            row["quantity"] = row.get("in_stock", 0)
-        else:
-            try:
-                row["quantity"] = max(0, int(str(quantity).strip()))
-            except (ValueError, AttributeError, TypeError):
-                row["quantity"] = row.get("in_stock", 0)
-
-        # Price field cleanup
-        price_fields = ["price", "priceSale",
-                        "regular_price", "supplier_price", "mrp"]
+        # Clean price fields if they are strings
+        price_fields = ["price", "priceSale", "regular_price", "supplier_price", "mrp"]
         for field in price_fields:
-            if field in row:
-                value = row[field]
-                if isinstance(value, str):
-                    cleaned = (
-                        value
-                        .replace(",", "")
-                        .replace("৳", "")
-                        .replace("$", "")
-                        .replace("€", "")
-                        .strip()
-                    )
-                    if cleaned:
-                        try:
-                            row[field] = float(cleaned)
-                        except ValueError:
-                            row[field] = None
-                    else:
+            if field in row and isinstance(row[field], str):
+                cleaned = (
+                    row[field]
+                    .replace(",", "")
+                    .replace("৳", "")
+                    .replace("$", "")
+                    .strip()
+                )
+                if cleaned:
+                    try:
+                        row[field] = float(cleaned)
+                    except ValueError:
                         row[field] = None
-
-        # Low stock threshold
-        low_stock = row.get("low_stock_threshold")
-        if self._has_value(low_stock):
+        
+        # Clean stock quantity if provided
+        if "stock_quantity" in row and isinstance(row["stock_quantity"], str):
             try:
-                row["low_stock_threshold"] = max(
-                    0, int(str(low_stock).strip()))
-            except (ValueError, AttributeError, TypeError):
-                row["low_stock_threshold"] = 20
-        else:
-            row["low_stock_threshold"] = 20
-
-        # Validate critical fields
+                row["stock_quantity"] = int(row["stock_quantity"].strip())
+            except (ValueError, AttributeError):
+                row["stock_quantity"] = None
+        
+        # Check for critical fields - product needs at least name or code
         has_name = self._has_value(row.get("name"))
         has_code = self._has_value(row.get("code"))
-
+        
         if not (has_name or has_code):
-            raise exceptions.ImportError(
-                "Row skipped: must have either 'name' or 'code'"
-            )
-
-        # Store location data for StockSummary creation
-        row["_import_location_type"] = row.get("location_type")
-        row["_import_location_id"] = row.get("location_id")
-
-    def save_instance(self, instance, is_new, using_transactions, dry_run, **kwargs):
-        """Collect instances for bulk StockSummary creation."""
-        if not hasattr(self, "_instances_for_stock"):
-            self._instances_for_stock = []
-
-        self._instances_for_stock.append({
-            "instance": instance,
-            "row": kwargs.get("row", {}),
-        })
-
-        super().save_instance(instance, is_new, using_transactions, dry_run, **kwargs)
-
-    def after_import(self, dataset, result, using_transactions, dry_run, **kwargs):
+            raise exceptions.ImportError("Skipping row: missing both name and code")
+    
+    def after_save_instance(self, instance, using_transactions, dry_run, **kwargs):
         """
-        Bulk create StockSummary records after all products are imported.
-        Uses atomic transaction for consistency and performance.
+        Create StockSummary records after product is saved.
+        This is called by django-import-export after instance.save().
         """
-        if dry_run or not hasattr(self, "_instances_for_stock"):
+        # Get the extra row data stored during import
+        source_row = kwargs.get('row')
+        if not source_row:
             return
-
-        instances_data = getattr(self, "_instances_for_stock", [])
-        if not instances_data:
+        
+        # Extract stock-related fields
+        unit_conversion_group_id = source_row.get('unit_conversion_group')
+        location_type = source_row.get('location_type')
+        location_id = source_row.get('location_id')
+        stock_quantity = source_row.get('stock_quantity')
+        
+        # Only create StockSummary if we have necessary data
+        if not (unit_conversion_group_id and location_type and location_id and stock_quantity):
             return
-
-        stock_summaries_to_create = []
-        affected_product_ids = set()
-
-        for item in instances_data:
-            instance = item["instance"]
-            row = item["row"]
-
-            if not instance.companyId:
-                print(
-                    f"⚠ Skipping StockSummary for product {instance.id}: no company")
-                continue
-
-            stock_qty = row.get("_import_stock_quantity") or instance.in_stock
-            if stock_qty is None:
-                stock_qty = 0
-
-            affected_product_ids.add(instance.id)
-
-            location_type = row.get("_import_location_type")
-            location_id = row.get("_import_location_id")
-
-            # Case 1: Specific warehouse/branch provided
-            if location_type and location_id:
-                warehouse = None
-                branch = None
-
-                try:
-                    if location_type.lower() == "warehouse":
-                        warehouse = Warehouse.objects.get(id=int(location_id))
-                    elif location_type.lower() == "branch":
-                        branch = Branch.objects.get(id=int(location_id))
-                    else:
-                        continue
-                except (Warehouse.DoesNotExist, Branch.DoesNotExist, ValueError):
-                    print(
-                        f"⚠ Location not found for product {instance.id}: {location_type} {location_id}")
-                    continue
-
-                if warehouse or branch:
-                    stock_summaries_to_create.append(
-                        StockSummary(
-                            product=instance,
-                            variant=None,
-                            warehouse=warehouse,
-                            branch=branch,
-                            company=instance.companyId,
-                            location="in_warehouse" if warehouse else "in_branch",
-                            quantity=max(0, int(stock_qty)
-                                         ) if stock_qty else 0,
-                        )
-                    )
-
-            # Case 2: Use product's warehouse
-            elif instance.warehouse:
-                stock_summaries_to_create.append(
-                    StockSummary(
-                        product=instance,
-                        variant=None,
-                        warehouse=instance.warehouse,
-                        branch=None,
-                        company=instance.companyId,
-                        location="in_warehouse",
-                        quantity=max(0, int(stock_qty)) if stock_qty else 0,
-                    )
-                )
-
-            # Case 3: Use product's branch
-            elif instance.branch:
-                stock_summaries_to_create.append(
-                    StockSummary(
-                        product=instance,
-                        variant=None,
-                        warehouse=None,
-                        branch=instance.branch,
-                        company=instance.companyId,
-                        location="in_branch",
-                        quantity=max(0, int(stock_qty)) if stock_qty else 0,
-                    )
-                )
-
-        if not stock_summaries_to_create:
-            return
-
-        # Bulk create with atomic transaction
+        
         try:
-            with transaction.atomic():
-                print(
-                    f"⏳ Creating {len(stock_summaries_to_create)} StockSummary records...")
-
-                created = StockSummary.objects.bulk_create(
-                    stock_summaries_to_create,
-                    batch_size=2000,
-                    ignore_conflicts=True
-                )
-
-                print(f"✓ Created {len(created)} StockSummary records")
-
-                # Recalculate Product.in_stock
-                print(
-                    f"⏳ Recalculating in_stock for {len(affected_product_ids)} products...")
-
-                for product_id in affected_product_ids:
-                    total = (
-                        StockSummary.objects.filter(product_id=product_id).aggregate(
-                            total=Sum("quantity")
-                        )["total"]
-                    ) or 0
-                    Product.objects.filter(
-                        pk=product_id).update(in_stock=total)
-
-                print(
-                    f"✓ Recalculated in_stock for {len(affected_product_ids)} products")
-
-        except Exception as e:
-            print(f"✗ Error creating StockSummary records: {str(e)}")
-            raise
+            # Get the UnitConversionGroup to find its base_unit
+            unit_group = UnitConversionGroup.objects.get(id=unit_conversion_group_id)
+            
+            # Determine warehouse vs branch
+            warehouse = None
+            branch = None
+            
+            if location_type == "warehouse":
+                warehouse = Warehouse.objects.get(id=location_id)
+            elif location_type == "branch":
+                branch = Branch.objects.get(id=location_id)
+            else:
+                return  # Invalid location type
+            
+            # Create StockSummary with the provided quantity
+            # The quantity is assumed to be in the base unit of the conversion group
+            StockSummary.objects.get_or_create(
+                product=instance,
+                variant=None,  # No variant unless specified
+                warehouse=warehouse,
+                branch=branch,
+                company=instance.companyId,
+                location=location_type if location_type == "in_warehouse" else "in_branch",
+                defaults={
+                    "quantity": stock_quantity,
+                }
+            )
+        except (UnitConversionGroup.DoesNotExist, Warehouse.DoesNotExist, 
+                Branch.DoesNotExist, ValueError, TypeError) as e:
+            # Log error but don't fail the import
+            print(f"Warning: Failed to create StockSummary for product {instance.id}: {str(e)}")
 
     def import_row(self, row, instance_loader, **kwargs):
-        """Filter row to only include valid model fields."""
+        # Only import fields that exist on the model or are declared on this resource
         model_fields = {f.name for f in self._meta.model._meta.get_fields()}
+        # Include column_names declared as resource fields (e.g. companyId, branch, generic_name)
         resource_columns = {f.column_name for f in self.fields.values()}
         allowed_keys = model_fields | resource_columns
-
-        # Include internal fields used for StockSummary creation
-        allowed_keys |= {
-            "_import_stock_quantity",
-            "_import_location_type",
-            "_import_location_id",
-        }
-
         cleaned_row = {k: v for k, v in row.items() if k in allowed_keys}
         return super().import_row(cleaned_row, instance_loader, **kwargs)
-
 
 @admin.register(ProductBranchInventory)
 class ProductBranchInventoryAdmin(admin.ModelAdmin):
@@ -665,11 +512,9 @@ class ProductBranchInventoryAdmin(admin.ModelAdmin):
         "available",
     )
     list_filter = ("branch",)
-    search_fields = ("product__name", "product__code",
-                     "branch__name", "branch__code")
+    search_fields = ("product__name", "product__code", "branch__name", "branch__code")
     autocomplete_fields = ("product", "branch")
     list_per_page = 50
-
 
 @admin.register(ProductStockMovement)
 class ProductStockMovementAdmin(admin.ModelAdmin):
@@ -734,8 +579,7 @@ class ProductAdmin(ImportExportModelAdmin):
         "createdAt",
         "updateAt",
     )
-    list_filter = ("status", "companyId", "branch",
-                   "category", "unit", "status", "supplier")
+    list_filter = ("status", "companyId", "branch", "category", "unit", "status", "supplier")
     search_fields = ("name", "code", "sku", "category", "unit__name")
     list_per_page = 20
     list_editable = ("quantity", "priceSale")
@@ -852,11 +696,9 @@ class ProductAdmin(ImportExportModelAdmin):
 
     branchname.short_description = "Branch"
 
-
 @admin.register(ProductVariant)
 class ProductVariantAdmin(ImportExportModelAdmin):
     list_display = ("product", "size")
-
 
 @admin.register(Category)
 class CategoryAdmin(ImportExportModelAdmin):
@@ -971,8 +813,7 @@ class ProductBatchAdmin(admin.ModelAdmin):
         "receivedAt",
     )
     list_filter = ("branch",)
-    search_fields = ("batch_no", "product__name",
-                     "product__sku", "product__code")
+    search_fields = ("batch_no", "product__name", "product__sku", "product__code")
     autocomplete_fields = ("product", "branch", "supplier")
     list_per_page = 50
     list_filter = ("id",)
@@ -990,17 +831,15 @@ class UnitAdmin(ImportExportModelAdmin):
 
 @admin.register(ProductSerialItem)
 class ProductSerialItemAdmin(admin.ModelAdmin):
-    list_display = ("id", "product", "variant", "serial_code", "status")
+    list_display = ("id", "product", "variant", "serial_code","status")
     list_filter = ("status",)
     list_per_page = 50
 
 # Inventory Management Admin
 
-
 @admin.register(StockSummary)
 class StockSummaryAdmin(admin.ModelAdmin):
-    list_display = ("product", "quantity", "location")
-
+    list_display= ("product", "quantity", "location")
 
 @admin.register(InventoryCategory)
 class InventoryCategoryAdmin(ImportExportModelAdmin):
@@ -1032,13 +871,11 @@ class InventoryItemAdmin(ImportExportModelAdmin):
     fieldsets = (
         (
             "Basic Information",
-            {"fields": ("name", "category", "unit", "sku",
-                        "description", "location")},
+            {"fields": ("name", "category", "unit", "sku", "description", "location")},
         ),
         (
             "Stock Information",
-            {"fields": ("current_stock", "reorder_level",
-                        "max_stock", "status")},
+            {"fields": ("current_stock", "reorder_level", "max_stock", "status")},
         ),
         ("Cost Information", {"fields": ("cost_per_unit", "total_value")}),
         ("Supplier Information", {"fields": ("supplier",)}),

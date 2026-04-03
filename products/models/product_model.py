@@ -267,9 +267,9 @@ class Product(Timestamp):
         ),
     )
     # Auto-computed field; never set this directly – it is recalculated in save().
-    in_stock_secondary = models.IntegerField(
-        default=0,
-        help_text="Read-only. Auto-computed as in_stock × unit_conversion_factor.",
+    in_stock_secondary = models.DecimalField(
+        max_digits=10, decimal_places=1, default=0,
+        help_text="Read-only. Auto-computed as in_stock × unit_conversion_factor (supports decimals).",
     )
 
     gender = models.CharField(
@@ -301,7 +301,10 @@ class Product(Timestamp):
     priceSale = models.FloatField(default=0, blank=True, null=True)
     regular_price = models.FloatField(default=0, blank=True, null=True)
     taxes = models.FloatField(default=0, blank=True, null=True)
-    in_stock = models.IntegerField(default=0)
+    in_stock = models.DecimalField(
+        max_digits=10, decimal_places=1, default=0,
+        help_text="Current stock quantity (auto-calculated from StockSummary, supports decimals)"
+    )
     is_publish = models.BooleanField(default=False)
 
     totalRatings = models.FloatField(default=0, blank=True, null=True)
@@ -948,9 +951,11 @@ class StockSummary(models.Model):
     )
 
     # ── How many ──────────────────────────────────────────────────────────────
-    quantity = models.IntegerField(
+    quantity = models.DecimalField(
+        max_digits=10, 
+        decimal_places=1, 
         default=0,
-        help_text="Available quantity at this location",
+        help_text="Available quantity at this location (supports decimals)",
     )
 
     # ── Timestamps ────────────────────────────────────────────────────────────

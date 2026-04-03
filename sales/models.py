@@ -454,7 +454,9 @@ class InvoiceItem(models.Model):
     )
 
     # Pricing and quantity (use legacy field names to avoid migration conflicts)
-    quantity = models.PositiveIntegerField(default=1)
+    quantity = models.DecimalField(
+        max_digits=10, decimal_places=1, default=1.0, help_text="Quantity (supports decimals for fractional units)"
+    )
     price = models.DecimalField(
         max_digits=10, decimal_places=2, default=0.00, help_text="Price per unit"
     )

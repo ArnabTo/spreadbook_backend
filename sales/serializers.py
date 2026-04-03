@@ -1334,7 +1334,7 @@ class POSOrderCreateSerializer(serializers.Serializer):
                                 stored_item_id = str(product.id)
 
                 # Create order item using legacy field names
-                quantity = int(item_data["quantity"])
+                quantity = Decimal(str(item_data["quantity"]))
                 title = item_data.get("name") or item_data.get("title")
                 category = item_data.get("category", "")
                 client_unit_price = Decimal(str(item_data.get("price") or 0))
@@ -1563,7 +1563,9 @@ class POSOrderCreateSerializer(serializers.Serializer):
                     ).filter(product=product, branch=branch, status="in_branch")
                     if variant_obj is not None:
                         _serial_qs = _serial_qs.filter(variant=variant_obj)
-                    for _serial in _serial_qs.order_by("id")[:quantity]:
+                    # Convert quantity to int for slicing (slicing requires integers)
+                    quantity_as_int = int(quantity) if isinstance(quantity, Decimal) else int(quantity)
+                    for _serial in _serial_qs.order_by("id")[:quantity_as_int]:
                         _serial.status = "sold"
                         _serial.save(update_fields=["status"])
 
