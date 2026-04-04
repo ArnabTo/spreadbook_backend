@@ -272,6 +272,29 @@ class Product(Timestamp):
         help_text="Read-only. Auto-computed as in_stock × unit_conversion_factor (supports decimals).",
     )
 
+    # ── Selling Unit (Customer purchase unit) ──────────────────────────────────
+    # The unit in which customers buy the product (e.g., Pieces, Tablets, ml)
+    # This is the unit for POS transactions. Price displayed in POS is per selling_unit.
+    selling_unit = models.ForeignKey(
+        Unit,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_index=True,
+        related_name="selling_products",
+        help_text="The unit in which customers buy this product (e.g., Piece, Tablet). Price is per selling_unit.",
+    )
+    selling_unit_conversion_factor = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=1,
+        help_text=(
+            "How many selling units equal 1 base unit. "
+            "E.g. if base=Box and selling=Piece, and 1 Box=10 Pieces, enter 10. "
+            "Used to convert customer quantity to base unit for stock deduction."
+        ),
+    )
+
     gender = models.CharField(
         max_length=100, choices=GENDER_CHOICE, default="All", blank=True, null=True
     )

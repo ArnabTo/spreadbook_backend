@@ -1,4 +1,5 @@
 from decimal import Clamped
+import logging
 from djoser.serializers import UserCreateSerializer
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
@@ -32,6 +33,7 @@ from suppliers.models import Supplier
 from .function import attempt_json_deserialize
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 class SizeSerializer(serializers.ModelSerializer):
@@ -200,6 +202,10 @@ class ProductSerializer(serializers.ModelSerializer):
     display_unit_name = serializers.CharField(
         source="display_unit.name", read_only=True, default=None
     )
+    # Selling unit read-only helpers
+    selling_unit_name = serializers.CharField(
+        source="selling_unit.name", read_only=True, default=None
+    )
     # Warehouse tracking read-only helpers
     warehouse_name = serializers.CharField(
         source="warehouse.name", read_only=True, default=None
@@ -214,6 +220,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "secondary_unit_name",
             "unit_conversion_group_name",
             "display_unit_name",
+            "selling_unit_name",
             "in_stock_secondary",
             "unique_code",
             "warehouse_name",
@@ -314,6 +321,37 @@ class ProductPostSerializer(serializers.ModelSerializer):
     display_unit_name = serializers.CharField(
         source="display_unit.name", read_only=True, default=None
     )
+    # Selling unit read-only helpers
+    selling_unit_name = serializers.CharField(
+        source="selling_unit.name", read_only=True, default=None
+    )
+
+    # Unit conversion fields - explicitly defined to ensure proper handling in updates
+    unit_conversion_group = serializers.PrimaryKeyRelatedField(
+        queryset=UnitConversionGroup.objects.all(),
+        required=False,
+        allow_null=True,
+        help_text="Conversion rule set used for this product",
+    )
+    display_unit = serializers.PrimaryKeyRelatedField(
+        queryset=Unit.objects.all(),
+        required=False,
+        allow_null=True,
+        help_text="Preferred unit for UI/API display",
+    )
+    selling_unit = serializers.PrimaryKeyRelatedField(
+        queryset=Unit.objects.all(),
+        required=False,
+        allow_null=True,
+        help_text="The unit in which customers buy this product",
+    )
+    selling_unit_conversion_factor = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        required=False,
+        default=1,
+        help_text="How many selling units equal 1 base unit",
+    )
     # Warehouse tracking read-only helpers
     warehouse_name = serializers.CharField(
         source="warehouse.name", read_only=True, default=None
@@ -327,6 +365,7 @@ class ProductPostSerializer(serializers.ModelSerializer):
             "secondary_unit_name",
             "unit_conversion_group_name",
             "display_unit_name",
+            "selling_unit_name",
             "in_stock_secondary",
             "unique_code",
             "warehouse_name",
@@ -398,8 +437,25 @@ class ProductPostSerializer(serializers.ModelSerializer):
         newlabel_data = validated_data.pop("newLabel", None)
         salelabel_data = validated_data.pop("saleLabel", None)
         variants_data = validated_data.pop("variants", None)
+        # Explicitly assign model fields before saving so FK / decimal updates
+        # are not lost through deferred instances or serializer edge cases.
+        explicit_fields = (
+            "unit_conversion_group",
+            "display_unit",
+            "selling_unit",
+            "selling_unit_conversion_factor",
+        )
 
         with transaction.atomic():
+            logger.debug(
+                "ProductPostSerializer.update incoming id=%s validated_data_keys=%s",
+                getattr(instance, "pk", None),
+                sorted(validated_data.keys()),
+            )
+            for field_name in explicit_fields:
+                if field_name in validated_data:
+                    setattr(instance, field_name, validated_data.pop(field_name))
+
             # Existing rows may have NULL labels; avoid crashing on PATCH.
             if newlabel_data is not None:
                 if instance.newLabel is None:
@@ -424,10 +480,25 @@ class ProductPostSerializer(serializers.ModelSerializer):
                 for variant_data in variants_data:
                     ProductVariant.objects.create(product=instance, **variant_data)
 
-            # Update product fields
-            updated_instance = super().update(instance, validated_data)
+            # Update remaining product fields.
+            for attr, value in validated_data.items():
+                setattr(instance, attr, value)
 
-        return updated_instance
+            instance.save()
+
+            logger.debug(
+                "ProductPostSerializer.update saved id=%s display_unit=%s unit_conversion_group=%s selling_unit=%s selling_unit_conversion_factor=%s in_stock=%s quantity=%s available=%s",
+                instance.pk,
+                getattr(instance, "display_unit_id", None),
+                getattr(instance, "unit_conversion_group_id", None),
+                getattr(instance, "selling_unit_id", None),
+                getattr(instance, "selling_unit_conversion_factor", None),
+                getattr(instance, "in_stock", None),
+                getattr(instance, "quantity", None),
+                getattr(instance, "available", None),
+            )
+
+        return instance
 
 
 class ProductTypeSerializer(serializers.ModelSerializer):
@@ -866,6 +937,26 @@ class StockSummaryPOSSerializer(serializers.ModelSerializer):
     variant_color = serializers.SerializerMethodField()
     variant_size_code = serializers.SerializerMethodField()
 
+    # Unit Conversion Group
+    unit_conversion_group = serializers.IntegerField(
+        source="product.unit_conversion_group_id", read_only=True
+    )
+    display_unit = serializers.IntegerField(
+        source="product.display_unit_id", read_only=True
+    )
+    display_unit_name = serializers.CharField(
+        source="product.display_unit.name", read_only=True
+    )
+    selling_unit = serializers.IntegerField(
+        source="product.selling_unit_id", read_only=True
+    )
+    selling_unit_name = serializers.CharField(
+        source="product.selling_unit.name", read_only=True
+    )
+    selling_unit_conversion_factor = serializers.IntegerField(
+        source="product.selling_unit_conversion_factor", read_only=True
+    )
+
     class Meta:
         model = StockSummary
         fields = [
@@ -885,6 +976,12 @@ class StockSummaryPOSSerializer(serializers.ModelSerializer):
             "variant_size_name",
             "variant_color",
             "variant_size_code",
+            "unit_conversion_group",
+            "display_unit",
+            "display_unit_name",
+            "selling_unit",
+            "selling_unit_name",
+            "selling_unit_conversion_factor",
         ]
 
     def get_id(self, obj):

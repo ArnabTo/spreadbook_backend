@@ -1343,6 +1343,14 @@ class POSOrderCreateSerializer(serializers.Serializer):
                 # Resolved fully inside `if product:` block below once we have the product record.
                 _sold_in_sec = False
 
+                # ── Selling unit conversion ───────────────────────────────────────────
+                # If the item has a selling_unit specified and a conversion factor,
+                # convert the quantity from selling units to base units.
+                base_quantity = quantity  # Default: no conversion
+                selling_unit_id = item_data.get("selling_unit_id")
+                selling_unit_qty = item_data.get("selling_unit_quantity")
+                is_selling_unit = False
+
                 # ── Variant fields (extracted early so stock check can use variant qty) ──
                 variant_size = (item_data.get("variant_size") or "").strip() or None
                 variant_size_name = (
@@ -1357,6 +1365,30 @@ class POSOrderCreateSerializer(serializers.Serializer):
                         uuid.UUID(raw_item_id)
                     except Exception:
                         stored_item_id = str(product.id)
+
+                    # ── Selling Unit Conversion ──────────────────────────────────────
+                    # Convert quantity from selling unit to base unit if selling_unit is set
+                    from decimal import Decimal as _Decimal
+
+                    if selling_unit_qty is not None:
+                        selling_unit_qty_dec = _Decimal(str(selling_unit_qty))
+                    else:
+                        selling_unit_qty_dec = None
+
+                    if product.selling_unit_id and selling_unit_qty_dec is not None:
+                        # Use selling unit conversion
+                        is_selling_unit = True
+                        conversion_factor = _Decimal(
+                            str(product.selling_unit_conversion_factor or 1)
+                        )
+                        base_quantity = selling_unit_qty_dec * conversion_factor
+                        quantity = (
+                            base_quantity  # Use base quantity for stock operations
+                        )
+                    elif selling_unit_qty_dec is not None:
+                        # Selling unit specified but product doesn't have one, use as-is
+                        quantity = selling_unit_qty_dec
+                        base_quantity = selling_unit_qty_dec
 
                     # ── Variant detection FIRST ───────────────────────────────────────
                     # Variant products store stock in ProductVariant.size_qty, NOT in
@@ -1564,7 +1596,11 @@ class POSOrderCreateSerializer(serializers.Serializer):
                     if variant_obj is not None:
                         _serial_qs = _serial_qs.filter(variant=variant_obj)
                     # Convert quantity to int for slicing (slicing requires integers)
-                    quantity_as_int = int(quantity) if isinstance(quantity, Decimal) else int(quantity)
+                    quantity_as_int = (
+                        int(quantity)
+                        if isinstance(quantity, Decimal)
+                        else int(quantity)
+                    )
                     for _serial in _serial_qs.order_by("id")[:quantity_as_int]:
                         _serial.status = "sold"
                         _serial.save(update_fields=["status"])

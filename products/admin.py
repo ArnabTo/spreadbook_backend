@@ -781,7 +781,7 @@ class ProductAdmin(ImportExportModelAdmin):
             },
         ),
         ("Price", {"fields": ("priceSale", "regular_price", "supplier_price")}),
-        ("Unit", {"fields": ("unit",)}),
+        ("Unit", {"fields": ("unit", "display_unit", "unit_conversion_group", "selling_unit", "selling_unit_conversion_factor" )}),
         (
             "Category",
             {
