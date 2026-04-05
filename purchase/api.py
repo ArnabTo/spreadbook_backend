@@ -103,6 +103,34 @@ def _receive_purchase_order_in_atomic(po: PurchaseOrder, *, actor: str) -> None:
         po.requisition.save(update_fields=["status", "updated_at"])
 
 
+def _create_purchase_order_for_requisition(requisition: PurchaseRequisition, actor: str) -> PurchaseOrder:
+    items = requisition.items.select_related("product", "inventory_item").all()
+    if not items:
+        raise ValueError("Requisition has no items.")
+
+    po = PurchaseOrder.objects.create(
+        requisition=requisition,
+        supplier=None,
+        status="pending",
+        notes=f"Auto-created from {requisition.pr_number}",
+        created_by=actor,
+    )
+
+    for it in items:
+        PurchaseOrderItem.objects.create(
+            purchase_order=po,
+            product=it.product if requisition.purchase_type == "direct_inventory" else None,
+            inventory_item=it.inventory_item if requisition.purchase_type != "direct_inventory" else None,
+            name=it.item_name,
+            quantity=it.quantity,
+            unit=it.unit,
+            unit_price=Decimal("0"),
+        )
+
+    po.recalc_total()
+    return po
+
+
 class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
     """
     API endpoint for Purchase Requisitions
@@ -147,6 +175,12 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
 
     def partial_update(self, request, *args, **kwargs):
         requisition: PurchaseRequisition = self.get_object()
+        incoming_status = None
+        if hasattr(request.data, 'get'):
+            incoming_status = request.data.get('status')
+        elif isinstance(request.data, dict):
+            incoming_status = request.data.get('status')
+
         if requisition.status == "approved":
             incoming = request.data if isinstance(request.data, dict) else {}
             # Allow only status transition to 'converted' for approved requisitions
@@ -168,7 +202,21 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        return super().partial_update(request, *args, **kwargs)
+
+        with transaction.atomic():
+            response = super().partial_update(request, *args, **kwargs)
+            if (
+                incoming_status == 'approved'
+                and requisition.status != 'approved'
+                and self.get_object().status == 'approved'
+            ):
+                actor = (
+                    request.user.username
+                    if request.user and request.user.is_authenticated
+                    else 'Anonymous'
+                )
+                _create_purchase_order_for_requisition(self.get_object(), actor)
+            return response
 
     @action(detail=True, methods=["post"], url_path="purchase")
     def purchase(self, request, *args, **kwargs):

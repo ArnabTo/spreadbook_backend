@@ -394,32 +394,37 @@ class ProductPostSerializer(serializers.ModelSerializer):
                 newLabel=newLabel, saleLabel=saleLabel, **validated_data
             )
 
-            # Create StockSummary record to track stock in base unit
+            # Create StockSummary record(s) to track stock in base unit
             # Stock should be stored via StockSummary, not directly on Product.
-            if product.in_stock > 0 or product.companyId:
-                company = product.companyId
-                warehouse = product.warehouse
-                branch = product.branch
+            company = product.companyId
+            warehouse = product.warehouse
+            branch = product.branch
+            location = "in_branch" if branch else "in_warehouse"
 
-                # Determine location from warehouse/branch
-                location = "in_branch" if branch else "in_warehouse"
-
-                # Create StockSummary for the product
-                # Quantity is stored in the base unit of the conversion group
-                StockSummary.objects.create(
-                    company=company,
-                    product=product,
-                    variant=None,  # No variants yet
-                    warehouse=warehouse,
-                    branch=branch,
-                    location=location,
-                    quantity=product.in_stock,  # In base unit
-                )
-
-            # Create variants if provided
             if variants_data:
                 for variant_data in variants_data:
-                    ProductVariant.objects.create(product=product, **variant_data)
+                    variant = ProductVariant.objects.create(product=product, **variant_data)
+                    if variant.size_qty and variant.size_qty > 0:
+                        StockSummary.objects.create(
+                            company=company,
+                            product=product,
+                            variant=variant,
+                            warehouse=warehouse,
+                            branch=branch,
+                            location=location,
+                            quantity=variant.size_qty,
+                        )
+            else:
+                if product.in_stock > 0 or company:
+                    StockSummary.objects.create(
+                        company=company,
+                        product=product,
+                        variant=None,
+                        warehouse=warehouse,
+                        branch=branch,
+                        location=location,
+                        quantity=product.in_stock,
+                    )
 
             # Seed a ProductBranchInventory row so per-branch stock/price lookups
             # work correctly from the moment the product is created.
@@ -475,10 +480,25 @@ class ProductPostSerializer(serializers.ModelSerializer):
 
             # Handle variants update (replace all variants)
             if variants_data is not None:
-                # Delete existing variants and create new ones
+                # Delete existing variants (and their stock summaries via cascade)
                 instance.variants.all().delete()
+                company = instance.companyId
+                warehouse = instance.warehouse
+                branch = instance.branch
+                location = "in_branch" if branch else "in_warehouse"
+
                 for variant_data in variants_data:
-                    ProductVariant.objects.create(product=instance, **variant_data)
+                    variant = ProductVariant.objects.create(product=instance, **variant_data)
+                    if variant.size_qty and variant.size_qty > 0:
+                        StockSummary.objects.create(
+                            company=company,
+                            product=instance,
+                            variant=variant,
+                            warehouse=warehouse,
+                            branch=branch,
+                            location=location,
+                            quantity=variant.size_qty,
+                        )
 
             # Update remaining product fields.
             for attr, value in validated_data.items():
@@ -1066,6 +1086,60 @@ class StockSummaryPOSSerializer(serializers.ModelSerializer):
 
     def get_variant_size_code(self, obj):
         return getattr(obj.variant, "size_code", None) if obj.variant_id else None
+
+
+class StockSummaryInventorySerializer(serializers.Serializer):
+    """Inventory Management serializer backed by aggregated StockSummary data."""
+
+    id = serializers.CharField(read_only=True)
+    product_id = serializers.CharField(read_only=True)
+    name = serializers.CharField(read_only=True)
+    category = serializers.CharField(read_only=True)
+    category_name = serializers.CharField(read_only=True)
+    code = serializers.CharField(read_only=True, allow_null=True)
+    sku = serializers.CharField(read_only=True, allow_null=True)
+    unit = serializers.CharField(read_only=True, allow_null=True)
+    unit_name = serializers.CharField(read_only=True, allow_null=True)
+    current_stock = serializers.FloatField(read_only=True)
+    reorder_level = serializers.FloatField(read_only=True)
+    max_stock = serializers.FloatField(read_only=True)
+    cost_per_unit = serializers.FloatField(read_only=True)
+    total_value = serializers.FloatField(read_only=True)
+    supplier = serializers.CharField(read_only=True, allow_null=True)
+    supplier_name = serializers.CharField(read_only=True, allow_null=True)
+    status = serializers.CharField(read_only=True)
+    status_display = serializers.CharField(read_only=True)
+    last_updated = serializers.CharField(read_only=True, allow_null=True)
+    formatted_last_updated = serializers.CharField(read_only=True, allow_null=True)
+    stock_percentage = serializers.FloatField(read_only=True)
+    is_low_stock = serializers.BooleanField(read_only=True)
+    description = serializers.CharField(read_only=True, allow_blank=True)
+    location = serializers.CharField(read_only=True, allow_null=True)
+    expiry_date = serializers.DateField(read_only=True, allow_null=True)
+    warranty_expiry_date = serializers.DateField(read_only=True, allow_null=True)
+    notes = serializers.CharField(read_only=True, allow_blank=True, allow_null=True)
+    average_usage = serializers.FloatField(read_only=True, allow_null=True)
+    inventoryType = serializers.CharField(read_only=True, allow_null=True)
+    low_stock_threshold = serializers.FloatField(read_only=True)
+    generic_name = serializers.CharField(read_only=True, allow_null=True)
+    brand_name = serializers.CharField(read_only=True, allow_null=True)
+    secondary_unit = serializers.CharField(read_only=True, allow_null=True)
+    secondary_unit_name = serializers.CharField(read_only=True, allow_null=True)
+    unit_conversion_factor = serializers.FloatField(read_only=True)
+    in_stock_secondary = serializers.FloatField(read_only=True)
+    unit_conversion_group = serializers.CharField(read_only=True, allow_null=True)
+    unit_conversion_group_name = serializers.CharField(read_only=True, allow_null=True)
+    display_unit = serializers.CharField(read_only=True, allow_null=True)
+    display_unit_name = serializers.CharField(read_only=True, allow_null=True)
+    selling_unit = serializers.CharField(read_only=True, allow_null=True)
+    selling_unit_name = serializers.CharField(read_only=True, allow_null=True)
+    selling_unit_conversion_factor = serializers.FloatField(read_only=True)
+    price = serializers.FloatField(read_only=True)
+    priceSale = serializers.FloatField(read_only=True)
+    regular_price = serializers.FloatField(read_only=True)
+    image = serializers.CharField(read_only=True, allow_null=True)
+    quantity = serializers.FloatField(read_only=True)
+    variants = serializers.ListField(child=serializers.DictField(), read_only=True)
 
 
 class StockTransferCreateSerializer(serializers.ModelSerializer):

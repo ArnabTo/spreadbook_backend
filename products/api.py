@@ -7,7 +7,8 @@ from rest_framework.views import APIView
 from django.utils.dateparse import parse_datetime, parse_date
 from django.utils.timezone import get_default_timezone, is_naive, make_aware
 from datetime import datetime, time
-from django.db.models import Q, Prefetch
+from django.db.models import Q, Prefetch, Sum, Value
+from django.db.models.functions import Coalesce
 from django.db import transaction
 
 from .models.category_model import Category
@@ -562,6 +563,9 @@ class ProductViewSet(viewsets.ModelViewSet):
         branch_id = self.request.query_params.get(
             "branch_id"
         ) or self.request.query_params.get("branchId")
+        warehouse_id = self.request.query_params.get(
+            "warehouse_id"
+        ) or self.request.query_params.get("warehouseId")
         if branch_id:
             try:
                 from products.models import ProductBranchInventory
@@ -613,14 +617,10 @@ class ProductViewSet(viewsets.ModelViewSet):
             qs = qs.filter(companyId_id=requested_company_id)
 
         if branch_id:
-            qs = qs.filter(branch_id=branch_id)
+            qs = qs.filter(Q(branch_id=branch_id) | Q(branch_id__isnull=True))
 
-        # Filter by warehouse_id for warehouse-level inventory
-        warehouse_id = self.request.query_params.get(
-            "warehouse_id"
-        ) or self.request.query_params.get("warehouseId")
         if warehouse_id:
-            qs = qs.filter(warehouse_id=warehouse_id)
+            qs = qs.filter(Q(warehouse_id=warehouse_id) | Q(warehouse_id__isnull=True))
 
         # Filter by location_status (warehouse/branch)
         location_status = self.request.query_params.get("location_status")

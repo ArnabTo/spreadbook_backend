@@ -355,11 +355,50 @@ class ProductImportResource(resources.ModelResource):
             "unit_conversion_group",
             "low_stock_threshold",
         )
-        import_id_fields = []
+        import_id_fields = ("companyId", "code")
         use_bulk = True
         batch_size = 2000
         report_skipped = True
         skip_unchanged = False
+
+    def _resolve_company(self, raw_value):
+        """Resolve company lookup values to a Company instance or None."""
+        if raw_value is None:
+            return None
+
+        if isinstance(raw_value, Company):
+            return raw_value
+
+        raw_text = str(raw_value).strip()
+        if not raw_text:
+            return None
+
+        if raw_text.isdigit():
+            return Company.objects.filter(pk=int(raw_text)).first()
+
+        return Company.objects.filter(name__iexact=raw_text).first()
+
+    def get_instance(self, instance_loader, row):
+        """Find an existing product by company and code before import."""
+        company_value = row.get("companyId")
+        code = row.get("code")
+        company = self._resolve_company(company_value)
+
+        if company is not None and self._has_value(code):
+            code_value = str(code).strip()
+            if code_value:
+                cache_key = (getattr(company, "pk", company), code_value.lower())
+                if not hasattr(self, "_product_instance_cache"):
+                    self._product_instance_cache = {}
+                if cache_key not in self._product_instance_cache:
+                    self._product_instance_cache[cache_key] = Product.objects.filter(
+                        companyId=company,
+                        code__iexact=code_value,
+                    ).first()
+                instance = self._product_instance_cache[cache_key]
+                if instance is not None:
+                    return instance
+        return super().get_instance(instance_loader, row)
 
     @classmethod
     def _normalize_header(cls, header):

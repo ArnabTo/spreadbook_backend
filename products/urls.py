@@ -26,6 +26,7 @@ from .inventory_api import (
     InventoryItemViewSet,
     InventoryCategoryViewSet,
     StockMovementViewSet,
+    StockSummaryInventoryView,
 )
 
 
@@ -92,5 +93,10 @@ urlpatterns = [
         "api/pos/catalog/",
         POSCatalogView.as_view(),
         name="pos-catalog",
+    ),
+    path(
+        "api/inventory/stock-summary-items/",
+        StockSummaryInventoryView.as_view(),
+        name="inventory-stock-summary-items",
     ),
 ] + urlpatterns
