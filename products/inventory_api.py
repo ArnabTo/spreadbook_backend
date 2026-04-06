@@ -502,13 +502,17 @@ class StockSummaryInventoryView(APIView):
                 if product.generic_name
                 else None
             )
-            brand_name = getattr(product.brand, "name", None) if product.brand else None
+            # Prefer direct CharField brand_name; fall back to FK brand.name
+            brand_name = product.brand_name or (
+                getattr(product.brand, "name", None) if product.brand else None
+            )
 
             items.append(
                 {
                     "id": str(product.id),
                     "product_id": str(product.id),
                     "name": product.name or "",
+                    "code": product.code or "",
                     "category": product.category or "",
                     "category_name": category_name,
                     "unit": product.unit_id,
@@ -543,6 +547,9 @@ class StockSummaryInventoryView(APIView):
                     "low_stock_threshold": low_stock_threshold,
                     "generic_name": generic_name,
                     "brand_name": brand_name,
+                    "manufacturer": product.manufacturer or "",
+                    "size": product.size or "",
+                    "condition": product.condition or "good",
                     "secondary_unit": product.secondary_unit_id,
                     "secondary_unit_name": (
                         getattr(product.secondary_unit, "name", None)
@@ -737,3 +744,67 @@ class StockMovementViewSet(viewsets.ReadOnlyModelViewSet):
                 )
 
         return qs.distinct()
+
+
+class ProductStockView(APIView):
+    """
+    GET /api/inventory/product-stock/<product_id>/
+    Returns aggregated StockSummary data for a single product, scoped by
+    branch_id or warehouse_id query parameter.
+
+    Response shape:
+    {
+        "product_id": "...",
+        "current_stock": 50,          # total across all StockSummary rows
+        "variants": [
+            {"id": "...", "size": "M", "size_qty": 20, ...},
+            ...
+        ]
+    }
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, product_id):
+        branch_id = request.query_params.get("branch_id") or request.query_params.get(
+            "branchId"
+        )
+        warehouse_id = request.query_params.get(
+            "warehouse_id"
+        ) or request.query_params.get("warehouseId")
+
+        qs = StockSummary.objects.select_related("variant").filter(
+            product_id=product_id
+        )
+
+        if branch_id:
+            qs = qs.filter(branch_id=branch_id, location="in_branch")
+        elif warehouse_id:
+            qs = qs.filter(warehouse_id=warehouse_id, location="in_warehouse")
+        # If neither is given, return totals across all locations.
+
+        total_stock = float(qs.aggregate(total=Sum("quantity"))["total"] or 0)
+
+        variants = []
+        for row in qs.filter(variant__isnull=False):
+            v = row.variant
+            variants.append(
+                {
+                    "id": str(v.id),
+                    "size": v.size,
+                    "size_name": v.size_name,
+                    "size_code": v.size_code,
+                    "size_qty": float(row.quantity or 0),
+                    "color": v.color,
+                    "price": float(v.price or 0),
+                    "supplier_price": float(v.supplier_price or 0),
+                }
+            )
+
+        return Response(
+            {
+                "product_id": str(product_id),
+                "current_stock": total_stock,
+                "variants": variants,
+            }
+        )

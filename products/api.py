@@ -812,8 +812,9 @@ class ProductViewSet(viewsets.ModelViewSet):
                     {"detail": "Invalid branch_id"}, status=status.HTTP_400_BAD_REQUEST
                 )
 
+            # in_stock is NOT in branch_fields — it is handled by the serializer
+            # which routes it to StockSummary (the single source of truth for stock).
             branch_fields = {
-                "in_stock",
                 "available",
                 "price",
                 "priceSale",
@@ -854,6 +855,8 @@ class ProductViewSet(viewsets.ModelViewSet):
                 "quantity",
                 "low_stock_threshold",
                 "variants",
+                # in_stock is included here so the serializer routes it to StockSummary.
+                "in_stock",
             }
             catalog_data = {
                 k: v for k, v in request.data.items() if k in catalog_allowed
@@ -888,8 +891,9 @@ class ProductViewSet(viewsets.ModelViewSet):
                     {"detail": "Invalid branch_id"}, status=status.HTTP_400_BAD_REQUEST
                 )
 
+            # in_stock is NOT in branch_fields — it is handled by the serializer
+            # which routes it to StockSummary (the single source of truth for stock).
             branch_fields = {
-                "in_stock",
                 "available",
                 "price",
                 "priceSale",
@@ -930,6 +934,8 @@ class ProductViewSet(viewsets.ModelViewSet):
                 "quantity",
                 "low_stock_threshold",
                 "variants",
+                # in_stock is included here so the serializer routes it to StockSummary.
+                "in_stock",
             }
             catalog_data = {
                 k: v for k, v in request.data.items() if k in catalog_allowed

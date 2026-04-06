@@ -1687,19 +1687,26 @@ class POSOrderCreateSerializer(serializers.Serializer):
             tax_decimal = Decimal(str(order.taxes)) / 100
             tax_amount = after_discount * tax_decimal
 
-            order.subTotal = float(subtotal)
+            # Quantize subtotal and discount to 2dp before storing so that Sale.save()
+            # re-computation (subTotal - discount_amount) stays free of sub-cent drift.
+            _subtotal_q = subtotal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            _discount_q = discount_amount.quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+            order.subTotal = float(_subtotal_q)
             order.discount = (
                 float(discount_value) if discount_type == "percentage" else 0
             )  # Store percentage rate
-            order.discount_amount = float(
-                discount_amount
-            )  # Store actual discount amount
+            order.discount_amount = float(_discount_q)  # Store actual discount amount
             order.taxes_value = float(tax_amount)
             order.service_charge_amount = float(service_charge_amount)
             order.tip_amount = float(tip_amount)
-            order.totalAmount = float(
+            # Quantize to 2dp using Decimal arithmetic BEFORE float conversion to
+            # prevent sub-cent floating-point noise (e.g. 8300.019999... → 8300.02).
+            _total_decimal = (
                 after_discount + tax_amount + service_charge_amount + tip_amount
-            )
+            ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            order.totalAmount = float(_total_decimal)
             order.total = order.totalAmount
             order.totalQty = sum(item_data["quantity"] for item_data in items_data)
             order.estimated_preparation_time = total_prep_time
@@ -1712,13 +1719,18 @@ class POSOrderCreateSerializer(serializers.Serializer):
             # Cash payment handling:
             # - If allow_partial_cash: accept cash_received < total and store remainder as due.
             # - Otherwise: if marked paid, require cash_received + waiver >= total.
+            # - If a discount/promo was applied, trust the client-provided change_amount
+            #   (>= 0 means the customer paid enough for the discounted total) rather than
+            #   comparing against the server-computed total, which may differ when a promo
+            #   code cannot be resolved server-side (e.g. expired but already validated by UI).
+            has_discount = discount_type not in (None, "none", "") or bool(promo_code)
             if payment_method == "cash":
                 received_total = Decimal(str(cash_received or 0)) + Decimal(
                     str(cash_waiver or 0)
                 )
-                # Round to 2 decimal places before comparison to avoid sub-cent
-                # floating-point noise from float arithmetic (e.g. 100.00000000001).
-                order_total = Decimal(str(round(float(order.totalAmount or 0), 2)))
+                # totalAmount is already quantized to 2dp above; convert directly
+                # to Decimal without an extra round() to preserve exactness.
+                order_total = Decimal(str(order.totalAmount or 0))
 
                 # Waiver should never be used if already fully paid by cash received.
                 if (
@@ -1732,7 +1744,18 @@ class POSOrderCreateSerializer(serializers.Serializer):
                         }
                     )
 
-                if received_total < order_total:
+                # When a discount/promo lowers the total, the server-computed order_total
+                # may not match the client-computed total (e.g. promo lookup fails silently).
+                # In that case, use the client-provided change_amount to determine sufficiency:
+                # change_amount >= 0 means the customer paid at least the discounted total.
+                client_change = validated_data.get("change_amount")
+                discount_paid_enough = (
+                    has_discount
+                    and client_change is not None
+                    and Decimal(str(client_change)) >= Decimal("0")
+                )
+
+                if received_total < order_total and not discount_paid_enough:
                     if allow_partial_cash:
                         # Partial payment: force unpaid.
                         order.is_paid = False
@@ -1750,6 +1773,10 @@ class POSOrderCreateSerializer(serializers.Serializer):
                                     "cash_received": "Partial cash payment is not enabled for POS"
                                 }
                             )
+                elif received_total < order_total and discount_paid_enough:
+                    # Discount was applied - trust client total. Use cash_received as the
+                    # applied amount and record zero due (already paid at discounted price).
+                    order.is_paid = True
                 else:
                     # Fully covered by cash (after waiver)
                     if allow_partial_cash:

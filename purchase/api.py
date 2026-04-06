@@ -40,7 +40,7 @@ def _receive_purchase_order_in_atomic(po: PurchaseOrder, *, actor: str) -> None:
 
     # Import here to reduce import-time coupling.
     from products.models.inventory_model import InventoryItem, StockMovement
-    from products.models.product_model import Product
+    from products.models.product_model import Product, StockSummary
 
     for it in items:
         qty = it.quantity
@@ -95,6 +95,41 @@ def _receive_purchase_order_in_atomic(po: PurchaseOrder, *, actor: str) -> None:
                     status="in stock",
                 )
 
+                # Update StockSummary for this product/variant
+                try:
+                    product_obj = (
+                        Product.objects.filter(pk=it.product_id)
+                        .select_related("companyId")
+                        .first()
+                    )
+                    if product_obj:
+                        warehouse = po.warehouse or product_obj.warehouse
+                        branch = po.branch
+                        location = "in_branch" if branch else "in_warehouse"
+                        ss, _ = StockSummary.objects.get_or_create(
+                            product=product_obj,
+                            variant=it.variant if it.variant_id else None,
+                            warehouse=None if branch else warehouse,
+                            branch=branch,
+                            location=location,
+                            defaults={
+                                "company": product_obj.companyId,
+                                "quantity": 0,
+                            },
+                        )
+                        ss.quantity = F("quantity") + qty_int
+                        ss.save(update_fields=["quantity"])
+                except Exception as e:
+                    # Non-fatal: stock summary update failure should not block receive
+                    import logging
+
+                    logging.getLogger(__name__).warning(
+                        "StockSummary update failed for product %s during PO %s receive: %s",
+                        it.product_id,
+                        po.po_number,
+                        e,
+                    )
+
     po.status = "delivered"
     po.save(update_fields=["status", "updated_at"])
 
@@ -103,9 +138,11 @@ def _receive_purchase_order_in_atomic(po: PurchaseOrder, *, actor: str) -> None:
         po.requisition.save(update_fields=["status", "updated_at"])
 
 
-def _create_purchase_order_for_requisition(requisition: PurchaseRequisition, actor: str) -> PurchaseOrder:
+def _create_purchase_order_for_requisition(
+    requisition: PurchaseRequisition, actor: str, company=None
+) -> PurchaseOrder:
     items = requisition.items.select_related("product", "inventory_item").all()
-    if not items:
+    if not items.exists():
         raise ValueError("Requisition has no items.")
 
     po = PurchaseOrder.objects.create(
@@ -114,13 +151,20 @@ def _create_purchase_order_for_requisition(requisition: PurchaseRequisition, act
         status="pending",
         notes=f"Auto-created from {requisition.pr_number}",
         created_by=actor,
+        companyId=company,
     )
 
     for it in items:
         PurchaseOrderItem.objects.create(
             purchase_order=po,
-            product=it.product if requisition.purchase_type == "direct_inventory" else None,
-            inventory_item=it.inventory_item if requisition.purchase_type != "direct_inventory" else None,
+            product=(
+                it.product if requisition.purchase_type == "direct_inventory" else None
+            ),
+            inventory_item=(
+                it.inventory_item
+                if requisition.purchase_type != "direct_inventory"
+                else None
+            ),
             name=it.item_name,
             quantity=it.quantity,
             unit=it.unit,
@@ -176,10 +220,10 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
     def partial_update(self, request, *args, **kwargs):
         requisition: PurchaseRequisition = self.get_object()
         incoming_status = None
-        if hasattr(request.data, 'get'):
-            incoming_status = request.data.get('status')
+        if hasattr(request.data, "get"):
+            incoming_status = request.data.get("status")
         elif isinstance(request.data, dict):
-            incoming_status = request.data.get('status')
+            incoming_status = request.data.get("status")
 
         if requisition.status == "approved":
             incoming = request.data if isinstance(request.data, dict) else {}
@@ -206,16 +250,21 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
         with transaction.atomic():
             response = super().partial_update(request, *args, **kwargs)
             if (
-                incoming_status == 'approved'
-                and requisition.status != 'approved'
-                and self.get_object().status == 'approved'
+                incoming_status == "approved"
+                and requisition.status != "approved"
+                and self.get_object().status == "approved"
             ):
                 actor = (
                     request.user.username
                     if request.user and request.user.is_authenticated
-                    else 'Anonymous'
+                    else "Anonymous"
                 )
-                _create_purchase_order_for_requisition(self.get_object(), actor)
+                company = getattr(request.user, "companyId", None) or getattr(
+                    request.user, "company", None
+                )
+                _create_purchase_order_for_requisition(
+                    self.get_object(), actor, company=company
+                )
             return response
 
     @action(detail=True, methods=["post"], url_path="purchase")
@@ -235,8 +284,7 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        items = requisition.items.select_related(
-            "product", "inventory_item").all()
+        items = requisition.items.select_related("product", "inventory_item").all()
         if not items:
             return Response(
                 {"detail": "Requisition has no items."},
@@ -358,8 +406,7 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
                     _receive_purchase_order_in_atomic(po, actor=actor)
                 except Exception as exc:
                     return Response(
-                        {"detail": str(
-                            exc) or "Failed to receive purchase order."},
+                        {"detail": str(exc) or "Failed to receive purchase order."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
@@ -372,7 +419,9 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
         po: PurchaseOrder = self.get_object()
         if po.status != "pending":
             return Response(
-                {"detail": f"Only pending POs can be approved. Current status: {po.status}."},
+                {
+                    "detail": f"Only pending POs can be approved. Current status: {po.status}."
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
         po.status = "approved"
@@ -386,7 +435,9 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
         po: PurchaseOrder = self.get_object()
         if po.status != "approved":
             return Response(
-                {"detail": f"Only approved POs can be marked as waiting for receive. Current status: {po.status}."},
+                {
+                    "detail": f"Only approved POs can be marked as waiting for receive. Current status: {po.status}."
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
         po.status = "waiting_for_receive"
@@ -497,8 +548,7 @@ class QuickPurchaseViewSet(viewsets.ModelViewSet):
                     else None
                 ),
                 sku=(
-                    str(sku).strip() if sku is not None and str(
-                        sku).strip() else None
+                    str(sku).strip() if sku is not None and str(sku).strip() else None
                 ),
                 price=float(qp.unit_price or 0),
                 in_stock=remaining,
@@ -531,8 +581,11 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = (
             PurchaseOrder.objects.select_related(
-                "supplier", "requisition", "branch", "warehouse", "companyId")
-            .prefetch_related("items__product", "items__variant", "items__inventory_item")
+                "supplier", "requisition", "branch", "warehouse", "companyId"
+            )
+            .prefetch_related(
+                "items__product", "items__variant", "items__inventory_item"
+            )
             .all()
             .order_by("-created_at")
         )
@@ -555,9 +608,11 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         if warehouse_id:
             qs = qs.filter(warehouse_id=warehouse_id)
 
-        company_id = self.request.query_params.get(
-            "company"
-        ) or self.request.query_params.get("company_id") or self.request.query_params.get("companyId")
+        company_id = (
+            self.request.query_params.get("company")
+            or self.request.query_params.get("company_id")
+            or self.request.query_params.get("companyId")
+        )
         if company_id:
             qs = qs.filter(companyId_id=company_id)
 
@@ -567,10 +622,9 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
         user = getattr(self.request, "user", None)
         if user and user.is_authenticated:
-            is_unrestricted = (
-                bool(getattr(user, "is_superuser", False))
-                or getattr(user, "role", None) in ("software_owner", "super_admin", "admin")
-            )
+            is_unrestricted = bool(getattr(user, "is_superuser", False)) or getattr(
+                user, "role", None
+            ) in ("software_owner", "super_admin", "admin")
             if not is_unrestricted:
                 allowed_branch_ids = set()
                 if hasattr(user, "branchAccess") and user.branchAccess.exists():
@@ -582,8 +636,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                     if branch_id and str(branch_id) not in {
                         str(bid) for bid in allowed_branch_ids
                     }:
-                        raise PermissionDenied(
-                            "You do not have access to this branch")
+                        raise PermissionDenied("You do not have access to this branch")
                     qs = qs.filter(branch_id__in=allowed_branch_ids)
                 elif getattr(user, "companyId_id", None):
                     qs = qs.filter(companyId_id=user.companyId_id)
@@ -594,22 +647,32 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         created_by = None
-        branch_id = self.request.data.get(
-            "branch") or self.request.data.get("branch_id")
-        warehouse_id = self.request.data.get(
-            "warehouse") or self.request.data.get("warehouse_id")
-        company_id = self.request.data.get(
-            "companyId") or self.request.data.get("company_id")
+        branch_id = self.request.data.get("branch") or self.request.data.get(
+            "branch_id"
+        )
+        warehouse_id = self.request.data.get("warehouse") or self.request.data.get(
+            "warehouse_id"
+        )
+        company_id = self.request.data.get("companyId") or self.request.data.get(
+            "company_id"
+        )
 
         if self.request.user and self.request.user.is_authenticated:
-            is_unrestricted = (
-                bool(getattr(self.request.user, "is_superuser", False))
-                or getattr(self.request.user, "role", None) in ("software_owner", "super_admin", "admin")
+            is_unrestricted = bool(
+                getattr(self.request.user, "is_superuser", False)
+            ) or getattr(self.request.user, "role", None) in (
+                "software_owner",
+                "super_admin",
+                "admin",
             )
             created_by = getattr(self.request.user, "username", None) or str(
                 self.request.user
             )
-            if not branch_id and not warehouse_id and hasattr(self.request.user, "branchAccess"):
+            if (
+                not branch_id
+                and not warehouse_id
+                and hasattr(self.request.user, "branchAccess")
+            ):
                 default_branch = self.request.user.branchAccess.first()
                 if default_branch:
                     branch_id = default_branch.id
@@ -625,8 +688,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                 if allowed_branch_ids and str(branch_id) not in {
                     str(bid) for bid in allowed_branch_ids
                 }:
-                    raise PermissionDenied(
-                        "You do not have access to this branch")
+                    raise PermissionDenied("You do not have access to this branch")
 
             # Auto-assign company from user if not provided
             if not company_id and getattr(self.request.user, "companyId_id", None):
@@ -668,7 +730,9 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         po: PurchaseOrder = self.get_object()
         if po.status != "pending":
             return Response(
-                {"detail": f"Only pending POs can be approved. Current status: {po.status}."},
+                {
+                    "detail": f"Only pending POs can be approved. Current status: {po.status}."
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
         po.status = "approved"
@@ -682,7 +746,9 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         po: PurchaseOrder = self.get_object()
         if po.status != "approved":
             return Response(
-                {"detail": f"Only approved POs can be marked as waiting for receive. Current status: {po.status}."},
+                {
+                    "detail": f"Only approved POs can be marked as waiting for receive. Current status: {po.status}."
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
         po.status = "waiting_for_receive"
@@ -722,8 +788,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                 _receive_purchase_order_in_atomic(po, actor=actor)
             except Exception as exc:
                 return Response(
-                    {"detail": str(
-                        exc) or "Failed to receive purchase order."},
+                    {"detail": str(exc) or "Failed to receive purchase order."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
@@ -753,33 +818,34 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         # Fallback: match by products/variants in PO items
         if not qs.exists():
             product_ids = list(
-                po.items.exclude(product__isnull=True)
-                .values_list("product_id", flat=True)
+                po.items.exclude(product__isnull=True).values_list(
+                    "product_id", flat=True
+                )
             )
             variant_ids = list(
-                po.items.exclude(variant__isnull=True)
-                .values_list("variant_id", flat=True)
+                po.items.exclude(variant__isnull=True).values_list(
+                    "variant_id", flat=True
+                )
             )
             if product_ids or variant_ids:
                 qs = ProductSerialItem.objects.select_related(
                     "product", "variant", "warehouse", "branch"
-                ).filter(
-                    Q(product_id__in=product_ids) | Q(
-                        variant_id__in=variant_ids)
-                )
+                ).filter(Q(product_id__in=product_ids) | Q(variant_id__in=variant_ids))
 
         pending = qs.exclude(status="received")
         received = qs.filter(status="received")
         total = qs.count()
         received_count = received.count()
 
-        return Response({
-            "pending": ProductSerialItemSerializer(pending, many=True).data,
-            "received": ProductSerialItemSerializer(received, many=True).data,
-            "total": total,
-            "received_count": received_count,
-            "all_received": total > 0 and received_count == total,
-        })
+        return Response(
+            {
+                "pending": ProductSerialItemSerializer(pending, many=True).data,
+                "received": ProductSerialItemSerializer(received, many=True).data,
+                "total": total,
+                "received_count": received_count,
+                "all_received": total > 0 and received_count == total,
+            }
+        )
 
     @action(detail=True, methods=["post"], url_path="scan-item")
     def scan_item(self, request, *args, **kwargs):
@@ -807,9 +873,9 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            item = ProductSerialItem.objects.select_related(
-                "product", "variant"
-            ).get(serial_code=serial_code)
+            item = ProductSerialItem.objects.select_related("product", "variant").get(
+                serial_code=serial_code
+            )
         except ProductSerialItem.DoesNotExist:
             return Response(
                 {"detail": f"No item found with serial code '{serial_code}'."},
@@ -818,19 +884,19 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
         if item.status == "received":
             return Response(
-                {"detail": "This item has already been received.",
-                    "already_received": True},
+                {
+                    "detail": "This item has already been received.",
+                    "already_received": True,
+                },
                 status=status.HTTP_200_OK,
             )
 
         # Verify item belongs to this PO — direct FK or product/variant match
         product_ids = set(
-            po.items.exclude(product__isnull=True).values_list(
-                "product_id", flat=True)
+            po.items.exclude(product__isnull=True).values_list("product_id", flat=True)
         )
         variant_ids = set(
-            po.items.exclude(variant__isnull=True).values_list(
-                "variant_id", flat=True)
+            po.items.exclude(variant__isnull=True).values_list("variant_id", flat=True)
         )
         belongs = (
             item.purchase_order_id == po.uuid
@@ -862,13 +928,15 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
             po.status = "delivered"
             po.save(update_fields=["status", "updated_at"])
 
-        return Response({
-            "serial_item": ProductSerialItemSerializer(item).data,
-            "pending_count": pending_count,
-            "received_count": total - pending_count,
-            "total": total,
-            "po_completed": po_completed,
-        })
+        return Response(
+            {
+                "serial_item": ProductSerialItemSerializer(item).data,
+                "pending_count": pending_count,
+                "received_count": total - pending_count,
+                "total": total,
+                "po_completed": po_completed,
+            }
+        )
 
     @action(detail=True, methods=["post"], url_path="receive-all")
     def receive_all(self, request, *args, **kwargs):
@@ -884,12 +952,10 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
             )
 
         product_ids = set(
-            po.items.exclude(product__isnull=True).values_list(
-                "product_id", flat=True)
+            po.items.exclude(product__isnull=True).values_list("product_id", flat=True)
         )
         variant_ids = set(
-            po.items.exclude(variant__isnull=True).values_list(
-                "variant_id", flat=True)
+            po.items.exclude(variant__isnull=True).values_list("variant_id", flat=True)
         )
 
         scope_qs = ProductSerialItem.objects.filter(
@@ -907,7 +973,9 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         po.status = "delivered"
         po.save(update_fields=["status", "updated_at"])
 
-        return Response({
-            "updated_count": updated_count,
-            "po_completed": True,
-        })
+        return Response(
+            {
+                "updated_count": updated_count,
+                "po_completed": True,
+            }
+        )

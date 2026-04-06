@@ -8,20 +8,6 @@ class PromotionSerializer(serializers.ModelSerializer):
     is_expiring_soon = serializers.ReadOnlyField()
     is_valid = serializers.ReadOnlyField()
 
-    # Convert field names to match frontend interface
-    startDate = serializers.DateTimeField(source="start_date")
-    endDate = serializers.DateTimeField(source="end_date")
-    minOrderValue = serializers.DecimalField(
-        source="min_order_value", max_digits=10, decimal_places=2
-    )
-    maxDiscount = serializers.DecimalField(
-        source="max_discount", max_digits=10, decimal_places=2
-    )
-    usageLimit = serializers.IntegerField(source="usage_limit")
-    usedCount = serializers.IntegerField(source="used_count", read_only=True)
-    applicableOn = serializers.CharField(source="applicable_on")
-    targetItems = serializers.JSONField(source="target_items")
-
     class Meta:
         model = Promotion
         fields = [
@@ -30,14 +16,14 @@ class PromotionSerializer(serializers.ModelSerializer):
             "type",
             "value",
             "code",
-            "startDate",
-            "endDate",
-            "minOrderValue",
-            "maxDiscount",
-            "usageLimit",
-            "usedCount",
-            "applicableOn",
-            "targetItems",
+            "start_date",
+            "end_date",
+            "min_order_value",
+            "max_discount",
+            "usage_limit",
+            "used_count",
+            "applicable_on",
+            "target_items",
             "status",
             "description",
             "usage_percentage",
@@ -50,11 +36,15 @@ class PromotionSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             "id",
-            "usedCount",
+            "used_count",
             "created_at",
             "updated_at",
             "usage_percentage",
+            "company",
         ]
+        extra_kwargs = {
+            "branch": {"required": False},
+        }
 
     def validate(self, data):
         """Custom validation for promotion data"""
@@ -80,8 +70,11 @@ class PromotionSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         if request and request.user:
             validated_data["created_by"] = request.user
-            if hasattr(request.user, "company") and request.user.company:
-                validated_data["company"] = request.user.company
+            company = getattr(request.user, "companyId", None) or getattr(
+                request.user, "company", None
+            )
+            if company:
+                validated_data["company"] = company
 
         return super().create(validated_data)
 

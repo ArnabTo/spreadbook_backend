@@ -275,27 +275,31 @@ class Sale(Timestamp):
     def calculate_totals(self):
         """Calculate order totals based on items"""
         # Sum up item totals and convert to float
-        subtotal_sum = (
-            sum(float(item.total_price) for item in self.items.all())
-            if hasattr(self, "items")
-            else 0
+        subtotal_sum = round(
+            (
+                sum(float(item.total_price) for item in self.items.all())
+                if hasattr(self, "items")
+                else 0
+            ),
+            2,
         )
 
-        discount_amount = float(self.discount_amount or 0)
-        base_amount = subtotal_sum - discount_amount
+        discount_amount = round(float(self.discount_amount or 0), 2)
+        base_amount = round(subtotal_sum - discount_amount, 2)
         if base_amount < 0:
             base_amount = 0
 
         self.subTotal = subtotal_sum
-        self.taxes_value = (base_amount * float(self.taxes or 0)) / 100
-        self.service_charge_amount = (
-            base_amount * float(self.service_charge_rate or 0)
-        ) / 100
-        self.totalAmount = (
+        self.taxes_value = round((base_amount * float(self.taxes or 0)) / 100, 2)
+        self.service_charge_amount = round(
+            (base_amount * float(self.service_charge_rate or 0)) / 100, 2
+        )
+        self.totalAmount = round(
             base_amount
             + float(self.taxes_value or 0)
             + float(self.service_charge_amount or 0)
-            + float(self.tip_amount or 0)
+            + float(self.tip_amount or 0),
+            2,
         )
         self.total = self.totalAmount
         self.totalQty = (
@@ -353,19 +357,22 @@ class Sale(Timestamp):
 
         # Keep derived amounts consistent.
         if self.subTotal is not None:
-            base_amount = float(self.subTotal or 0) - float(self.discount_amount or 0)
+            base_amount = round(
+                float(self.subTotal or 0) - float(self.discount_amount or 0), 2
+            )
             if base_amount < 0:
                 base_amount = 0
 
-            self.taxes_value = (base_amount / 100) * float(self.taxes or 0)
-            self.service_charge_amount = (base_amount / 100) * float(
-                self.service_charge_rate or 0
+            self.taxes_value = round((base_amount / 100) * float(self.taxes or 0), 2)
+            self.service_charge_amount = round(
+                (base_amount / 100) * float(self.service_charge_rate or 0), 2
             )
-            self.totalAmount = (
+            self.totalAmount = round(
                 base_amount
                 + float(self.taxes_value or 0)
                 + float(self.service_charge_amount or 0)
-                + float(self.tip_amount or 0)
+                + float(self.tip_amount or 0),
+                2,
             )
             self.total = self.totalAmount
 
@@ -455,7 +462,10 @@ class InvoiceItem(models.Model):
 
     # Pricing and quantity (use legacy field names to avoid migration conflicts)
     quantity = models.DecimalField(
-        max_digits=10, decimal_places=1, default=1.0, help_text="Quantity (supports decimals for fractional units)"
+        max_digits=10,
+        decimal_places=1,
+        default=1.0,
+        help_text="Quantity (supports decimals for fractional units)",
     )
     price = models.DecimalField(
         max_digits=10, decimal_places=2, default=0.00, help_text="Price per unit"

@@ -383,28 +383,36 @@ class ProductPostSerializer(serializers.ModelSerializer):
         )
         variants_data = validated_data.pop("variants", [])
 
+        # Pop stock fields from product payload — stock is managed exclusively
+        # via StockSummary. Product.in_stock will be auto-recalculated by signal.
+        initial_stock = validated_data.pop("in_stock", 0) or 0
+        validated_data.pop("available", None)
+        # quantity (max_capacity) stays on the Product model; it is not stock.
+
         # Use atomic transaction to ensure data consistency
         with transaction.atomic():
             # Create labels
             newLabel = NewLabel.objects.create(**newlabel_data)
             saleLabel = SaleLabel.objects.create(**salelabel_data)
 
-            # Create product
+            # Create product with in_stock=0; signal will set it from StockSummary.
             product = Product.objects.create(
-                newLabel=newLabel, saleLabel=saleLabel, **validated_data
+                newLabel=newLabel, saleLabel=saleLabel, in_stock=0, **validated_data
             )
 
-            # Create StockSummary record(s) to track stock in base unit
-            # Stock should be stored via StockSummary, not directly on Product.
             company = product.companyId
             warehouse = product.warehouse
             branch = product.branch
             location = "in_branch" if branch else "in_warehouse"
 
             if variants_data:
+                # Variant products: one StockSummary row per variant with qty > 0
                 for variant_data in variants_data:
-                    variant = ProductVariant.objects.create(product=product, **variant_data)
-                    if variant.size_qty and variant.size_qty > 0:
+                    variant = ProductVariant.objects.create(
+                        product=product, **variant_data
+                    )
+                    qty = variant.size_qty or 0
+                    if qty > 0:
                         StockSummary.objects.create(
                             company=company,
                             product=product,
@@ -412,10 +420,11 @@ class ProductPostSerializer(serializers.ModelSerializer):
                             warehouse=warehouse,
                             branch=branch,
                             location=location,
-                            quantity=variant.size_qty,
+                            quantity=qty,
                         )
             else:
-                if product.in_stock > 0 or company:
+                # Simple product: one StockSummary row for the whole product
+                if initial_stock > 0:
                     StockSummary.objects.create(
                         company=company,
                         product=product,
@@ -423,8 +432,9 @@ class ProductPostSerializer(serializers.ModelSerializer):
                         warehouse=warehouse,
                         branch=branch,
                         location=location,
-                        quantity=product.in_stock,
+                        quantity=initial_stock,
                     )
+                    # Signal will auto-update Product.in_stock = initial_stock
 
             # Seed a ProductBranchInventory row so per-branch stock/price lookups
             # work correctly from the moment the product is created.
@@ -442,6 +452,12 @@ class ProductPostSerializer(serializers.ModelSerializer):
         newlabel_data = validated_data.pop("newLabel", None)
         salelabel_data = validated_data.pop("saleLabel", None)
         variants_data = validated_data.pop("variants", None)
+
+        # Pop stock fields — stock is managed exclusively via StockSummary.
+        # Product.in_stock is auto-recalculated by signal after StockSummary changes.
+        new_stock = validated_data.pop("in_stock", None)
+        validated_data.pop("available", None)
+
         # Explicitly assign model fields before saving so FK / decimal updates
         # are not lost through deferred instances or serializer edge cases.
         explicit_fields = (
@@ -478,18 +494,24 @@ class ProductPostSerializer(serializers.ModelSerializer):
                     salelabel_serializer = self.fields["saleLabel"]
                     salelabel_serializer.update(instance.saleLabel, salelabel_data)
 
-            # Handle variants update (replace all variants)
-            if variants_data is not None:
-                # Delete existing variants (and their stock summaries via cascade)
+            # Handle variants update (replace all variants + their StockSummary rows)
+            if variants_data is not None and len(variants_data) > 0:
+                # Delete existing variants (StockSummary rows cascade-delete via FK)
                 instance.variants.all().delete()
+                # Also explicitly clear any orphan non-variant StockSummary rows
+                StockSummary.objects.filter(product=instance, variant=None).delete()
+
                 company = instance.companyId
                 warehouse = instance.warehouse
                 branch = instance.branch
                 location = "in_branch" if branch else "in_warehouse"
 
                 for variant_data in variants_data:
-                    variant = ProductVariant.objects.create(product=instance, **variant_data)
-                    if variant.size_qty and variant.size_qty > 0:
+                    variant = ProductVariant.objects.create(
+                        product=instance, **variant_data
+                    )
+                    qty = variant.size_qty or 0
+                    if qty > 0:
                         StockSummary.objects.create(
                             company=company,
                             product=instance,
@@ -497,25 +519,41 @@ class ProductPostSerializer(serializers.ModelSerializer):
                             warehouse=warehouse,
                             branch=branch,
                             location=location,
-                            quantity=variant.size_qty,
+                            quantity=qty,
                         )
+                # Signal will recalculate Product.in_stock automatically.
 
-            # Update remaining product fields.
+            if new_stock is not None and not variants_data:
+                # Non-variant product: update the single StockSummary row (or create one)
+                updated_count = StockSummary.objects.filter(
+                    product=instance,
+                    variant=None,
+                ).update(quantity=new_stock)
+                if not updated_count:
+                    StockSummary.objects.create(
+                        company=instance.companyId,
+                        product=instance,
+                        variant=None,
+                        warehouse=instance.warehouse,
+                        branch=instance.branch,
+                        location="in_branch" if instance.branch else "in_warehouse",
+                        quantity=new_stock,
+                    )
+                # Signal fires automatically and updates Product.in_stock.
+
+            # Update remaining product catalog fields (no stock fields remain here).
             for attr, value in validated_data.items():
                 setattr(instance, attr, value)
 
             instance.save()
 
             logger.debug(
-                "ProductPostSerializer.update saved id=%s display_unit=%s unit_conversion_group=%s selling_unit=%s selling_unit_conversion_factor=%s in_stock=%s quantity=%s available=%s",
+                "ProductPostSerializer.update saved id=%s display_unit=%s unit_conversion_group=%s selling_unit=%s in_stock=%s",
                 instance.pk,
                 getattr(instance, "display_unit_id", None),
                 getattr(instance, "unit_conversion_group_id", None),
                 getattr(instance, "selling_unit_id", None),
-                getattr(instance, "selling_unit_conversion_factor", None),
                 getattr(instance, "in_stock", None),
-                getattr(instance, "quantity", None),
-                getattr(instance, "available", None),
             )
 
         return instance
@@ -1123,6 +1161,11 @@ class StockSummaryInventorySerializer(serializers.Serializer):
     low_stock_threshold = serializers.FloatField(read_only=True)
     generic_name = serializers.CharField(read_only=True, allow_null=True)
     brand_name = serializers.CharField(read_only=True, allow_null=True)
+    manufacturer = serializers.CharField(
+        read_only=True, allow_null=True, allow_blank=True
+    )
+    size = serializers.CharField(read_only=True, allow_null=True, allow_blank=True)
+    condition = serializers.CharField(read_only=True, allow_null=True, allow_blank=True)
     secondary_unit = serializers.CharField(read_only=True, allow_null=True)
     secondary_unit_name = serializers.CharField(read_only=True, allow_null=True)
     unit_conversion_factor = serializers.FloatField(read_only=True)
