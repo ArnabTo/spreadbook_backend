@@ -22,15 +22,13 @@ class StockTransfer(models.Model):
     )
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    transfer_number = models.CharField(
-        max_length=32, unique=True, db_index=True)
+    transfer_number = models.CharField(max_length=32, unique=True, db_index=True)
     company = models.ForeignKey(
         "company.Company",
         on_delete=models.CASCADE,
         related_name="stock_transfers",
     )
-    transfer_type = models.CharField(
-        max_length=30, choices=TRANSFER_TYPE_CHOICES)
+    transfer_type = models.CharField(max_length=30, choices=TRANSFER_TYPE_CHOICES)
     status = models.CharField(
         max_length=20, choices=STATUS_CHOICES, default="draft", db_index=True
     )
@@ -75,10 +73,12 @@ class StockTransfer(models.Model):
     class Meta:
         ordering = ["-created_at"]
         indexes = [
-            models.Index(fields=["company", "status"],
-                         name="idx_transfer_company_status"),
-            models.Index(fields=["company", "transfer_type"],
-                         name="idx_transfer_company_type"),
+            models.Index(
+                fields=["company", "status"], name="idx_transfer_company_status"
+            ),
+            models.Index(
+                fields=["company", "transfer_type"], name="idx_transfer_company_type"
+            ),
         ]
 
     def save(self, *args, **kwargs):
@@ -97,11 +97,9 @@ class StockTransfer(models.Model):
         The StockSummary post_save signal then auto-recalculates Product.in_stock.
         """
         if self.status not in ("draft", "in_transit"):
-            raise ValueError(
-                f"Cannot complete a transfer with status '{self.status}'")
+            raise ValueError(f"Cannot complete a transfer with status '{self.status}'")
 
-        transfer_items = self.items.select_related(
-            "serial_item", "product", "variant")
+        transfer_items = self.items.select_related("serial_item", "product", "variant")
         dest_is_branch = self.destination_branch_id is not None
 
         # Count non-rejected items per (product, variant) to bulk-adjust summaries
@@ -141,7 +139,9 @@ class StockTransfer(models.Model):
                 variant_id=variant_id,
                 warehouse_id=self.destination_warehouse_id,
                 branch_id=self.destination_branch_id,
-                location="in_warehouse" if self.destination_warehouse_id else "in_branch",
+                location=(
+                    "in_warehouse" if self.destination_warehouse_id else "in_branch"
+                ),
                 delta=count,
             )
 
@@ -149,11 +149,13 @@ class StockTransfer(models.Model):
         self.completed_at = now()
         self.save(update_fields=["status", "completed_at"])
 
-    def _adjust_summary(self, product_id, variant_id, warehouse_id, branch_id, location, delta):
-        from .product_model import StockSummary
+    def _adjust_summary(
+        self, product_id, variant_id, warehouse_id, branch_id, location, delta
+    ):
+        from .inventory_model import ProductBranchInventory
 
-        summary, _ = StockSummary.objects.get_or_create(
-            company_id=self.company_id,
+        summary, _ = ProductBranchInventory.objects.get_or_create(
+            companyId_id=self.company_id,
             product_id=product_id,
             variant_id=variant_id,
             warehouse_id=warehouse_id,

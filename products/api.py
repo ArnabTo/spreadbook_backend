@@ -21,7 +21,6 @@ from .models.product_model import (
     Color,
     ProductVariant,
     ProductSerialItem,
-    StockSummary,
     UnitConversionGroup,
     UnitConversionStep,
 )
@@ -69,7 +68,7 @@ from products.branch_inventory import (
     update_branch_fields,
 )
 
-from .models.inventory_model import ProductStockMovement
+from .models.inventory_model import ProductStockMovement, ProductBranchInventory
 from .serializers import (
     AddStockSerializer,
     ProductStockMovementSerializer,
@@ -580,8 +579,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                             "price",
                             "priceSale",
                             "regular_price",
-                            "in_stock",
-                            "available",
+                            "quantity",
                         ),
                         to_attr="_branch_inventory_for_request",
                     )
@@ -985,20 +983,24 @@ class ProductViewSet(viewsets.ModelViewSet):
                 notes=serializer.validated_data.get("notes", ""),
                 updated_by=request.user,
             )
-            # Also update StockSummary for this branch
+            # Also update ProductBranchInventory for this branch
             try:
-                stock_summary, _ = StockSummary.objects.get_or_create(
+                pbi, _ = ProductBranchInventory.objects.get_or_create(
                     product=product,
                     variant=None,
                     branch=branch,
                     warehouse=None,
-                    location="in_branch",
-                    defaults={"company": product.companyId, "quantity": 0},
+                    defaults={
+                        "companyId": product.companyId,
+                        "quantity": 0,
+                        "location": "in_branch",
+                    },
                 )
-                stock_summary.quantity += qty_int
-                stock_summary.save(update_fields=["quantity"])
+                ProductBranchInventory.objects.filter(pk=pbi.pk).update(
+                    quantity=F("quantity") + qty_int
+                )
             except Exception as e:
-                print(f"Error updating StockSummary for branch: {e}")
+                print(f"Error updating ProductBranchInventory for branch: {e}")
         else:
             prev = int(product.in_stock or 0)
             new = prev + qty_int
@@ -1014,20 +1016,24 @@ class ProductViewSet(viewsets.ModelViewSet):
                     "updateAt",
                 ]
             )
-            # Also update StockSummary for warehouse (when no branch specified)
+            # Also update ProductBranchInventory for warehouse
             try:
-                stock_summary, _ = StockSummary.objects.get_or_create(
+                pbi, _ = ProductBranchInventory.objects.get_or_create(
                     product=product,
                     variant=None,
                     warehouse=product.warehouse,
                     branch=None,
-                    location="in_warehouse",
-                    defaults={"company": product.companyId, "quantity": 0},
+                    defaults={
+                        "companyId": product.companyId,
+                        "quantity": 0,
+                        "location": "in_warehouse",
+                    },
                 )
-                stock_summary.quantity += qty_int
-                stock_summary.save(update_fields=["quantity"])
+                ProductBranchInventory.objects.filter(pk=pbi.pk).update(
+                    quantity=F("quantity") + qty_int
+                )
             except Exception as e:
-                print(f"Error updating StockSummary for warehouse: {e}")
+                print(f"Error updating ProductBranchInventory for warehouse: {e}")
 
             ProductStockMovement.objects.create(
                 product=product,
@@ -1077,20 +1083,25 @@ class ProductViewSet(viewsets.ModelViewSet):
                 notes=serializer.validated_data.get("notes", ""),
                 updated_by=request.user,
             )
-            # Also update StockSummary for this branch
+            # Also update ProductBranchInventory for this branch
             try:
-                stock_summary, _ = StockSummary.objects.get_or_create(
+                pbi, _ = ProductBranchInventory.objects.get_or_create(
                     product=product,
                     variant=None,
                     branch=branch,
                     warehouse=None,
-                    location="in_branch",
-                    defaults={"company": product.companyId, "quantity": 0},
+                    defaults={
+                        "companyId": product.companyId,
+                        "quantity": 0,
+                        "location": "in_branch",
+                    },
                 )
-                stock_summary.quantity = max(0, stock_summary.quantity - actual)
-                stock_summary.save(update_fields=["quantity"])
+                new_qty = max(0, int(pbi.quantity or 0) - actual)
+                ProductBranchInventory.objects.filter(pk=pbi.pk).update(
+                    quantity=new_qty
+                )
             except Exception as e:
-                print(f"Error updating StockSummary for branch: {e}")
+                print(f"Error updating ProductBranchInventory for branch: {e}")
         else:
             prev = int(product.in_stock or 0)
             actual = min(prev, qty_int)
@@ -1107,20 +1118,25 @@ class ProductViewSet(viewsets.ModelViewSet):
                     "updateAt",
                 ]
             )
-            # Also update StockSummary for warehouse (when no branch specified)
+            # Also update ProductBranchInventory for warehouse
             try:
-                stock_summary, _ = StockSummary.objects.get_or_create(
+                pbi, _ = ProductBranchInventory.objects.get_or_create(
                     product=product,
                     variant=None,
                     warehouse=product.warehouse,
                     branch=None,
-                    location="in_warehouse",
-                    defaults={"company": product.companyId, "quantity": 0},
+                    defaults={
+                        "companyId": product.companyId,
+                        "quantity": 0,
+                        "location": "in_warehouse",
+                    },
                 )
-                stock_summary.quantity = max(0, stock_summary.quantity - actual)
-                stock_summary.save(update_fields=["quantity"])
+                new_qty = max(0, int(pbi.quantity or 0) - actual)
+                ProductBranchInventory.objects.filter(pk=pbi.pk).update(
+                    quantity=new_qty
+                )
             except Exception as e:
-                print(f"Error updating StockSummary for warehouse: {e}")
+                print(f"Error updating ProductBranchInventory for warehouse: {e}")
 
             ProductStockMovement.objects.create(
                 product=product,
@@ -1711,7 +1727,7 @@ class POSCatalogView(APIView):
                 )
 
         qs = (
-            StockSummary.objects.filter(
+            ProductBranchInventory.objects.filter(
                 branch_id=branch_id,
                 location="in_branch",
             )

@@ -81,24 +81,20 @@ def get_or_create_branch_inventory(product, branch):
     # - If the product is shared (branch=NULL) or for a different branch, start stock at 0.
     if getattr(product, "branch_id", None) and str(product.branch_id) == str(branch.id):
         stock_seed = int(getattr(product, "in_stock", 0) or 0)
-        available_seed = int(
-            getattr(product, "available", stock_seed) or stock_seed)
     else:
         stock_seed = 0
-        available_seed = 0
 
     inv = ProductBranchInventory.objects.create(
         product=product,
         branch=branch,
+        location="in_branch",
         companyId=getattr(product, "companyId", None)
         or getattr(branch, "company", None),
         price=getattr(product, "price", 0) or 0,
         priceSale=getattr(product, "priceSale", 0) or 0,
         regular_price=getattr(product, "regular_price", 0) or 0,
-        in_stock=stock_seed,
-        available=available_seed,
-        low_stock_threshold=int(
-            getattr(product, "low_stock_threshold", 20) or 20),
+        quantity=stock_seed,
+        low_stock_threshold=int(getattr(product, "low_stock_threshold", 20) or 20),
     )
     return inv
 
@@ -121,8 +117,10 @@ def get_effective_numbers(product, branch) -> EffectiveProductNumbers:
     from products.models import ProductBranchInventory
 
     inv = (
-        ProductBranchInventory.objects.filter(product=product, branch=branch)
-        .only("price", "priceSale", "regular_price", "in_stock", "available")
+        ProductBranchInventory.objects.filter(
+            product=product, branch=branch, variant__isnull=True
+        )
+        .only("price", "priceSale", "regular_price", "quantity")
         .first()
     )
     if inv is None:
@@ -138,11 +136,13 @@ def get_effective_numbers(product, branch) -> EffectiveProductNumbers:
         )
 
     return EffectiveProductNumbers(
-        price=_to_decimal(inv.price),
-        priceSale=_to_decimal(inv.priceSale),
-        regular_price=_to_decimal(inv.regular_price),
-        in_stock=int(inv.in_stock or 0),
-        available=int(inv.available or 0),
+        price=_to_decimal(inv.price) or _to_decimal(getattr(product, "price", 0)),
+        priceSale=_to_decimal(inv.priceSale)
+        or _to_decimal(getattr(product, "priceSale", 0)),
+        regular_price=_to_decimal(inv.regular_price)
+        or _to_decimal(getattr(product, "regular_price", 0)),
+        in_stock=int(inv.quantity or 0),
+        available=int(inv.quantity or 0),
     )
 
 
@@ -154,16 +154,26 @@ def update_branch_fields(product, branch, *, fields: dict, updated_by=None):
     if inv is None:
         return None
 
-    allowed = {"price", "priceSale", "regular_price", "in_stock", "available"}
-    clean = {k: v for k, v in (fields or {}).items() if k in allowed}
+    # Normalize legacy field names: in_stock / available → quantity
+    fields = dict(fields or {})
+    if "in_stock" in fields and "quantity" not in fields:
+        fields["quantity"] = fields.pop("in_stock")
+    else:
+        fields.pop("in_stock", None)
+    if "available" in fields and "quantity" not in fields:
+        fields["quantity"] = fields.pop("available")
+    else:
+        fields.pop("available", None)
 
-    if "in_stock" in clean and "available" not in clean:
-        clean["available"] = clean["in_stock"]
+    allowed = {"price", "priceSale", "regular_price", "quantity"}
+    clean = {k: v for k, v in fields.items() if k in allowed}
 
     for k, v in clean.items():
-        if k in {"in_stock", "available"}:
+        if k == "quantity":
             try:
-                setattr(inv, k, int(v or 0))
+                from decimal import Decimal as _D
+
+                setattr(inv, k, _D(str(v or 0)))
             except Exception:
                 setattr(inv, k, 0)
         else:
@@ -173,25 +183,7 @@ def update_branch_fields(product, branch, *, fields: dict, updated_by=None):
                 setattr(inv, k, 0)
 
     inv.save()
-
-    # Backward compatibility: if this Product is explicitly bound to the same branch,
-    # keep Product.in_stock in sync so older code paths continue to work.
-    if getattr(product, "branch_id", None) and str(product.branch_id) == str(branch.id):
-        update_fields = []
-        if "in_stock" in clean:
-            product.in_stock = int(inv.in_stock or 0)
-            update_fields.append("in_stock")
-        if "available" in clean:
-            product.available = int(inv.available or 0)
-            update_fields.append("available")
-        if update_fields:
-            # Some code expects these derived fields to be updated.
-            update_fields += ["in_stock_secondary", "updateAt",
-                              "status", "inventoryType", "out_of_stock"]
-            try:
-                product.save(update_fields=list(dict.fromkeys(update_fields)))
-            except Exception:
-                product.save()
+    # Signal (pbi_post_save) automatically recalculates Product.in_stock.
 
     return inv
 
@@ -223,30 +215,13 @@ def adjust_branch_stock(
             product.save()
         return None
 
-    prev = int(inv.in_stock or 0)
-    new = prev + int(delta)
-    inv.in_stock = new
-    inv.available = new
-    inv.save(update_fields=["in_stock", "available", "updated_at"])
+    from decimal import Decimal as _D
 
-    # Keep legacy product mirror when safe
-    if getattr(product, "branch_id", None) and str(product.branch_id) == str(branch.id):
-        product.in_stock = new
-        product.available = new
-        try:
-            product.save(
-                update_fields=[
-                    "in_stock",
-                    "in_stock_secondary",
-                    "available",
-                    "updateAt",
-                    "status",
-                    "inventoryType",
-                    "out_of_stock",
-                ]
-            )
-        except Exception:
-            product.save()
+    prev = int(inv.quantity or 0)
+    new = prev + int(delta)
+    inv.quantity = _D(str(new))
+    inv.save(update_fields=["quantity", "updated_at"])
+    # Signal (pbi_post_save) automatically recalculates Product.in_stock.
 
     # Optional audit trail (best-effort)
     try:

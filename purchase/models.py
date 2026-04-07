@@ -168,6 +168,7 @@ class PurchaseOrder(Timestamp):
         ("pending", "Pending"),
         ("approved", "Approved"),
         ("waiting_for_receive", "Waiting for Receive"),
+        ("received", "Received"),
         ("delivered", "Delivered"),
         ("cancelled", "Cancelled"),
     )
@@ -214,6 +215,11 @@ class PurchaseOrder(Timestamp):
     expected_delivery_date = models.DateField(null=True, blank=True)
     total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     notes = models.TextField(null=True, blank=True)
+    payment_status = models.CharField(
+        max_length=10,
+        choices=[("unpaid", "Unpaid"), ("paid", "Paid")],
+        default="unpaid",
+    )
     created_by = models.CharField(max_length=150, null=True, blank=True)
 
     def save(self, *args, **kwargs):
@@ -279,6 +285,12 @@ class PurchaseOrderItem(models.Model):
     unit = models.CharField(max_length=50)
     unit_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     total_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    item_status = models.CharField(
+        max_length=10,
+        choices=[("pending", "Pending"), ("received", "Received")],
+        default="pending",
+    )
+    remarks = models.TextField(null=True, blank=True)
     expiry_date = models.DateField(null=True, blank=True)
     warranty_expiry_date = models.DateField(null=True, blank=True)
 

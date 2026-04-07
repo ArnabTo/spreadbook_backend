@@ -3,7 +3,7 @@ from djoser.serializers import UserCreateSerializer
 from django.contrib.auth import get_user_model
 from products.models.product_model import Product
 from rest_framework import serializers
-from .models import Sale, InvoiceItem, Refund, RefundItem
+from .models import Sale, InvoiceItem, Refund, RefundItem, SalePayment
 from customers.models import Customer
 from django.utils import timezone
 from django.db import models
@@ -454,6 +454,8 @@ class POSOrderSerializer(serializers.ModelSerializer):
             "is_paid",
             "is_return",
             "kot_printed",
+            "advance",
+            "due",
             "order_time",
             "ready_time",
             "served_time",
@@ -766,6 +768,12 @@ class POSOrderCreateSerializer(serializers.Serializer):
     # the paid portion in `advance` and the remainder in `due`.
     allow_partial_cash = serializers.BooleanField(required=False, default=False)
 
+    # Generic partial/due payment: when set, the order is created as "due" if
+    # paid_amount < total. Works for any payment method.
+    paid_amount = serializers.DecimalField(
+        max_digits=10, decimal_places=2, required=False, allow_null=True
+    )
+
     def validate_order_type(self, value):
         """Normalize order_type from frontend format to backend format"""
         if not value:
@@ -963,6 +971,8 @@ class POSOrderCreateSerializer(serializers.Serializer):
         allow_price_override = bool(validated_data.pop("allow_price_override", False))
 
         allow_partial_cash = bool(validated_data.pop("allow_partial_cash", False))
+
+        paid_amount = validated_data.pop("paid_amount", None)
 
         prescription_id = validated_data.pop("prescription_id", None)
 
@@ -1432,9 +1442,13 @@ class POSOrderCreateSerializer(serializers.Serializer):
                     if effective and float(effective) > 0:
                         unit_price = Decimal(str(effective))
                     else:
-                        unit_price = Decimal("0")
-                        if allow_price_override and client_unit_price > 0:
-                            unit_price = client_unit_price
+                        # Branch inventory row has no price set (e.g. new product or
+                        # ProductBranchInventory.price == 0).  Fall back to the
+                        # client-sent price, which comes directly from the product
+                        # catalog displayed in the POS — not arbitrary user input.
+                        unit_price = (
+                            client_unit_price if client_unit_price > 0 else Decimal("0")
+                        )
 
                     # Variant-specific price overrides the base product price.
                     # ProductVariant.price > 0 means this variant has its own pricing.
@@ -1561,32 +1575,13 @@ class POSOrderCreateSerializer(serializers.Serializer):
                 subtotal += item.total
                 total_prep_time = max(total_prep_time, item.preparation_time)
 
-                # ── Reduce StockSummary quantity + mark ProductSerialItem as sold ──────────
-                # Applies only to Product lines (not restaurant MenuItem lines) when a branch
-                # is known.  Uses select_for_update to prevent two concurrent POS sessions
-                # from overselling the same unit.
+                # ── Mark ProductSerialItem as sold ────────────────────────────────
+                # Stock quantity is already deducted above via adjust_branch_stock
+                # (or by _invoice_item_stock_deduct signal for variant/secondary-unit
+                # products). Only the serial item status update is needed here.
                 if product is not None and branch is not None:
                     from products.models.product_model import (
-                        StockSummary as _StockSummary,
                         ProductSerialItem as _PSI,
-                    )
-                    from django.db.models import F as _F
-
-                    _summary_filter = {
-                        "product": product,
-                        "branch": branch,
-                        "location": "in_branch",
-                    }
-                    if variant_obj is not None:
-                        _summary_filter["variant"] = variant_obj
-                    else:
-                        _summary_filter["variant__isnull"] = True
-
-                    # Decrement StockSummary.quantity (floor at 0 to avoid negatives).
-                    _rows_updated = (
-                        _StockSummary.objects.select_for_update()
-                        .filter(**_summary_filter, quantity__gt=0)
-                        .update(quantity=_F("quantity") - quantity)
                     )
 
                     # Mark corresponding serial/unit records as sold (FIFO order).
@@ -1796,6 +1791,24 @@ class POSOrderCreateSerializer(serializers.Serializer):
                     except Exception:
                         pass
 
+            # Generic paid_amount handling (non-cash or simplified due flow).
+            # Only applied when cash_received was not explicitly set (avoids double-write).
+            if paid_amount is not None and (cash_received is None):
+                try:
+                    paid_dec = Decimal(str(paid_amount))
+                    order_total_dec = Decimal(str(order.totalAmount or 0))
+                    if paid_dec < order_total_dec:
+                        order.advance = float(paid_dec)
+                        order.due = float(max(order_total_dec - paid_dec, Decimal("0")))
+                        order.status = "due"
+                        order.is_paid = False
+                    else:
+                        order.advance = float(order_total_dec)
+                        order.due = 0.0
+                        order.is_paid = True
+                except Exception:
+                    pass
+
             order.save()
 
             # Update customer statistics and award loyalty points (100 BDT = 1 point)
@@ -1892,3 +1905,36 @@ class RefundListSerializer(serializers.ModelSerializer):
         if not u:
             return None
         return getattr(u, "name", None) or getattr(u, "username", None) or str(u.id)
+
+
+class SalePaymentSerializer(serializers.ModelSerializer):
+    created_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SalePayment
+        fields = [
+            "id",
+            "sale",
+            "amount",
+            "payment_method",
+            "notes",
+            "created_at",
+            "created_by_name",
+        ]
+        read_only_fields = ["id", "sale", "created_at", "created_by_name"]
+
+    def get_created_by_name(self, obj):
+        u = obj.created_by
+        if not u:
+            return None
+        return (
+            getattr(u, "get_full_name", lambda: None)()
+            or getattr(u, "username", None)
+            or str(u.id)
+        )
+
+
+class RecordPaymentSerializer(serializers.Serializer):
+    amount = serializers.DecimalField(max_digits=10, decimal_places=2)
+    payment_method = serializers.CharField(max_length=20, default="cash")
+    notes = serializers.CharField(required=False, allow_blank=True)

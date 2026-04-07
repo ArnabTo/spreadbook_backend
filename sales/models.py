@@ -25,6 +25,7 @@ STATUS_CHOICE = (
     ("ready", "Ready"),
     ("served", "Served"),
     ("paid", "Paid"),
+    ("due", "Due"),
     ("cancelled", "Cancelled"),
     ("overdue", "Overdue"),
 )
@@ -622,6 +623,33 @@ class RefundItem(models.Model):
 
     def __str__(self):
         return f"RefundItem {self.quantity}x {self.invoice_item_id}"
+
+
+class SalePayment(models.Model):
+    """Records individual payment transactions against a due Sale."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    sale = models.ForeignKey(Sale, related_name="payments", on_delete=models.CASCADE)
+    amount = models.FloatField(help_text="Amount paid in this transaction")
+    payment_method = models.CharField(
+        max_length=20, choices=PAYMENT_CHOICE, default="cash"
+    )
+    notes = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="recorded_payments",
+    )
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def __str__(self):
+        return f"Payment BDT {self.amount} for {self.sale_id}"
 
 
 # class InvoiceTo (models.Model):

@@ -14,18 +14,18 @@ from .models.product_model import (
     Color,
     ProductVariant,
     ProductSerialItem,
-    StockSummary,
     UnitConversionGroup,
     UnitConversionStep,
 )
-from .models.rating_model import Rating
-from .models.review_model import Review
 from .models.inventory_model import (
     InventoryItem,
     InventoryCategory,
     StockMovement,
     ProductStockMovement,
+    ProductBranchInventory,
 )
+from .models.rating_model import Rating
+from .models.review_model import Review
 from .models.stock_transfer_model import StockTransfer, StockTransferItem
 from .models import ProductType, GenericName, Brand, ProductBarcode, ProductBatch
 from .models.unit_model import Unit
@@ -33,7 +33,6 @@ from suppliers.models import Supplier
 from .function import attempt_json_deserialize
 
 User = get_user_model()
-logger = logging.getLogger(__name__)
 
 
 class SizeSerializer(serializers.ModelSerializer):
@@ -257,8 +256,7 @@ class ProductSerializer(serializers.ModelSerializer):
                         "price",
                         "priceSale",
                         "regular_price",
-                        "in_stock",
-                        "available",
+                        "quantity",
                     )
                     .first()
                 )
@@ -284,8 +282,8 @@ class ProductSerializer(serializers.ModelSerializer):
         data["price"] = inv.price
         data["priceSale"] = inv.priceSale
         data["regular_price"] = inv.regular_price
-        data["in_stock"] = inv.in_stock
-        data["available"] = inv.available
+        data["in_stock"] = int(inv.quantity or 0)
+        data["available"] = int(inv.quantity or 0)
         return data
 
     def update(self, instance, validated_data):
@@ -406,15 +404,15 @@ class ProductPostSerializer(serializers.ModelSerializer):
             location = "in_branch" if branch else "in_warehouse"
 
             if variants_data:
-                # Variant products: one StockSummary row per variant with qty > 0
+                # Variant products: one ProductBranchInventory row per variant with qty > 0
                 for variant_data in variants_data:
                     variant = ProductVariant.objects.create(
                         product=product, **variant_data
                     )
                     qty = variant.size_qty or 0
                     if qty > 0:
-                        StockSummary.objects.create(
-                            company=company,
+                        ProductBranchInventory.objects.create(
+                            companyId=company,
                             product=product,
                             variant=variant,
                             warehouse=warehouse,
@@ -423,10 +421,10 @@ class ProductPostSerializer(serializers.ModelSerializer):
                             quantity=qty,
                         )
             else:
-                # Simple product: one StockSummary row for the whole product
+                # Simple product: one ProductBranchInventory row for the whole product
                 if initial_stock > 0:
-                    StockSummary.objects.create(
-                        company=company,
+                    ProductBranchInventory.objects.create(
+                        companyId=company,
                         product=product,
                         variant=None,
                         warehouse=warehouse,
@@ -494,12 +492,14 @@ class ProductPostSerializer(serializers.ModelSerializer):
                     salelabel_serializer = self.fields["saleLabel"]
                     salelabel_serializer.update(instance.saleLabel, salelabel_data)
 
-            # Handle variants update (replace all variants + their StockSummary rows)
+            # Handle variants update (replace all variants + their ProductBranchInventory rows)
             if variants_data is not None and len(variants_data) > 0:
-                # Delete existing variants (StockSummary rows cascade-delete via FK)
+                # Delete existing variants (ProductBranchInventory variant rows cascade-delete via FK)
                 instance.variants.all().delete()
-                # Also explicitly clear any orphan non-variant StockSummary rows
-                StockSummary.objects.filter(product=instance, variant=None).delete()
+                # Also explicitly clear any orphan non-variant rows
+                ProductBranchInventory.objects.filter(
+                    product=instance, variant=None
+                ).delete()
 
                 company = instance.companyId
                 warehouse = instance.warehouse
@@ -512,8 +512,8 @@ class ProductPostSerializer(serializers.ModelSerializer):
                     )
                     qty = variant.size_qty or 0
                     if qty > 0:
-                        StockSummary.objects.create(
-                            company=company,
+                        ProductBranchInventory.objects.create(
+                            companyId=company,
                             product=instance,
                             variant=variant,
                             warehouse=warehouse,
@@ -524,14 +524,14 @@ class ProductPostSerializer(serializers.ModelSerializer):
                 # Signal will recalculate Product.in_stock automatically.
 
             if new_stock is not None and not variants_data:
-                # Non-variant product: update the single StockSummary row (or create one)
-                updated_count = StockSummary.objects.filter(
+                # Non-variant product: update the single ProductBranchInventory row (or create one)
+                updated_count = ProductBranchInventory.objects.filter(
                     product=instance,
                     variant=None,
                 ).update(quantity=new_stock)
                 if not updated_count:
-                    StockSummary.objects.create(
-                        company=instance.companyId,
+                    ProductBranchInventory.objects.create(
+                        companyId=instance.companyId,
                         product=instance,
                         variant=None,
                         warehouse=instance.warehouse,
@@ -964,7 +964,7 @@ class StockTransferSerializer(serializers.ModelSerializer):
 
 
 class StockSummaryPOSSerializer(serializers.ModelSerializer):
-    """Serializer for POS catalog items backed by a single StockSummary row.
+    """Serializer for POS catalog items backed by a single ProductBranchInventory row.
 
     Each row represents one product (or one product+variant) at a specific branch.
     The ``id`` field is a cart-safe composite key so the frontend can send it back
@@ -1016,7 +1016,7 @@ class StockSummaryPOSSerializer(serializers.ModelSerializer):
     )
 
     class Meta:
-        model = StockSummary
+        model = ProductBranchInventory
         fields = [
             "summary_id",
             "id",

@@ -143,6 +143,8 @@ class PurchaseOrderItemSerializer(serializers.ModelSerializer):
             "total_price",
             "expiry_date",
             "warranty_expiry_date",
+            "item_status",
+            "remarks",
         ]
         read_only_fields = [
             "uuid",
@@ -200,6 +202,7 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
             "total_amount",
             "notes",
             "created_by",
+            "payment_status",
             "items",
             "items_count",
             "total_quantity",

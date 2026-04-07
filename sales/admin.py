@@ -100,3 +100,13 @@ class InvoiceItemAdmin(admin.ModelAdmin):
     )
     list_filter = ("variant_size", "variant_color")
     search_fields = ("title", "variant_size", "variant_size_name", "variant_color")
+
+
+from .models import SalePayment
+
+@admin.register(SalePayment)
+class SalePaymentAdmin(admin.ModelAdmin):
+    list_display = ("sale", "amount", "payment_method", "created_at", "created_by")
+    list_filter = ("payment_method",)
+    search_fields = ("sale__order_number",)
+    raw_id_fields = ("sale",)

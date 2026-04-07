@@ -2,6 +2,7 @@ from settings import urls as SystemSettings
 from supplier_ledger import urls as SupplierLedger
 from common import urls as Common
 from pharmacy import urls as Pharmacy
+from inventory_log import urls as InventoryLog
 from purchase import urls as Purchase
 from resort import urls as Resort
 from hotel import urls as Hotel
@@ -70,6 +71,7 @@ urlpatterns = [
     path("api/reports/", include(Reports)),
     path("api/", include(Reseller)),
     path("", include(Payroll)),
+    path("", include(InventoryLog)),
     path("", include(Purchase)),
     path("", include(Pharmacy)),
     path("", include(Sales)),

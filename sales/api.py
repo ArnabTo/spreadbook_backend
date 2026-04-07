@@ -3,7 +3,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from decimal import Decimal
 
-from .models import Sale, InvoiceItem, Refund, RefundItem
+from .models import Sale, InvoiceItem, Refund, RefundItem, SalePayment
 from .serializers import (
     SaleSerializer,
     InvoiceSerialzer,
@@ -14,6 +14,8 @@ from .serializers import (
     RefundCreateSerializer,
     RefundSerializer,
     RefundListSerializer,
+    SalePaymentSerializer,
+    RecordPaymentSerializer,
 )
 from rest_framework import serializers, viewsets, permissions
 from rest_framework import generics
@@ -477,6 +479,11 @@ class POSOrderViewSet(viewsets.ModelViewSet):
         if branch_id:
             queryset = queryset.filter(branch_id=branch_id)
 
+        # Order number search (for barcode scanner lookup)
+        order_number = self.request.query_params.get("order_number")
+        if order_number:
+            queryset = queryset.filter(order_number__icontains=order_number.strip())
+
         return queryset
 
     def _resolve_company(self):
@@ -651,6 +658,8 @@ class POSOrderViewSet(viewsets.ModelViewSet):
             order.served_time = timezone.now()
         elif new_status == "paid":
             order.is_paid = True
+        elif new_status == "due":
+            order.is_paid = False
 
         order.save()
 
@@ -855,6 +864,64 @@ class POSOrderViewSet(viewsets.ModelViewSet):
         order = self.get_object()
         refunds_qs = Refund.objects.filter(sale=order).order_by("-created_at")
         return Response(RefundSerializer(refunds_qs, many=True).data)
+
+    @action(detail=True, methods=["get"], url_path="payments")
+    def get_payments(self, request, pk=None):
+        """List payment records for a due POS order."""
+        order = self.get_object()
+        payments_qs = SalePayment.objects.filter(sale=order).order_by("created_at")
+        return Response(SalePaymentSerializer(payments_qs, many=True).data)
+
+    @action(detail=True, methods=["post"], url_path="record_payment")
+    def record_payment(self, request, pk=None):
+        """Record a payment instalment towards a due POS order."""
+        order = self.get_object()
+
+        if order.status == "cancelled":
+            return Response(
+                {"error": "Cannot record payment for a cancelled order"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        ser = RecordPaymentSerializer(data=request.data)
+        if not ser.is_valid():
+            return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        amount = float(ser.validated_data["amount"])
+        if amount <= 0:
+            return Response(
+                {"error": "Payment amount must be greater than zero"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        SalePayment.objects.create(
+            sale=order,
+            amount=amount,
+            payment_method=ser.validated_data.get("payment_method", "cash"),
+            notes=ser.validated_data.get("notes", "") or "",
+            created_by=request.user if request.user.is_authenticated else None,
+        )
+
+        # Recalculate advance / due from all payment records
+        total_paid = (
+            SalePayment.objects.filter(sale=order).aggregate(s=Sum("amount"))["s"]
+            or 0.0
+        )
+        total_paid = float(total_paid)
+        order_total = float(order.totalAmount or 0)
+        remaining = max(order_total - total_paid, 0.0)
+
+        order.advance = total_paid
+        order.due = remaining
+
+        if remaining <= 0:
+            order.status = "paid"
+            order.is_paid = True
+            order.due = 0.0
+
+        order.save()
+        serializer = self.get_serializer(order)
+        return Response(serializer.data)
 
     @action(detail=True, methods=["post"], url_path="refund")
     def refund(self, request, pk=None):

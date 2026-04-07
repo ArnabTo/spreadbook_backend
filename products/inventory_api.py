@@ -14,8 +14,12 @@ from common.drf_scoping import (
 from rest_framework.exceptions import PermissionDenied
 from company.models import Branch
 
-from .models.inventory_model import InventoryItem, InventoryCategory, StockMovement
-from .models.product_model import StockSummary
+from .models.inventory_model import (
+    InventoryItem,
+    InventoryCategory,
+    StockMovement,
+    ProductBranchInventory,
+)
 from .serializers import (
     InventoryItemSerializer,
     InventoryItemCreateUpdateSerializer,
@@ -375,7 +379,7 @@ class StockSummaryInventoryView(APIView):
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
-        qs = StockSummary.objects.select_related(
+        qs = ProductBranchInventory.objects.select_related(
             "product",
             "product__unit",
             "product__display_unit",
@@ -773,7 +777,7 @@ class ProductStockView(APIView):
             "warehouse_id"
         ) or request.query_params.get("warehouseId")
 
-        qs = StockSummary.objects.select_related("variant").filter(
+        qs = ProductBranchInventory.objects.select_related("variant").filter(
             product_id=product_id
         )
 

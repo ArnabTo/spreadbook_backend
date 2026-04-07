@@ -2,17 +2,30 @@ from django.db import models
 from django.utils import timezone
 import uuid
 from suppliers.models import Supplier
-from .product_model import Product
+from .product_model import Product, ProductVariant
 from .unit_model import Unit
 from company.models import Company, Branch
+from django.db.models.signals import post_save, post_delete
+from django.dispatch import receiver
 
 
 class ProductBranchInventory(models.Model):
-    """Per-branch inventory + price overrides for a shared Product catalog.
+    """Unified per-location inventory + price overrides for a shared Product catalog.
 
-    This enables: shared product list across branches (no 10k-row duplication),
-    while keeping price + stock isolated per branch.
+    One row per (product, variant, warehouse, branch) combination.
+    Single source of truth for stock quantities across branches and warehouses.
+
+    Pricing fields (price, priceSale, regular_price) are used for branch rows;
+    they default to 0 for warehouse rows.
+
+    The post_save/post_delete signals automatically recalculate Product.in_stock
+    as the SUM of all quantity rows for that product.
     """
+
+    LOCATION_CHOICES = (
+        ("in_warehouse", "In Warehouse"),
+        ("in_branch", "In Branch"),
+    )
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
@@ -30,23 +43,55 @@ class ProductBranchInventory(models.Model):
         db_index=True,
         related_name="product_branch_inventory",
     )
+
+    # ── Where ──────────────────────────────────────────────────────────────
+    # Either branch OR warehouse must be set; both may be NULL for legacy rows.
     branch = models.ForeignKey(
         Branch,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name="product_branch_inventory",
         db_index=True,
     )
+    warehouse = models.ForeignKey(
+        "company.Warehouse",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="product_branch_inventory",
+        db_index=True,
+    )
+    location = models.CharField(
+        max_length=20,
+        choices=LOCATION_CHOICES,
+        default="in_branch",
+        db_index=True,
+    )
 
-    # Branch-specific pricing
+    # ── What (variant support) ──────────────────────────────────────────────
+    variant = models.ForeignKey(
+        ProductVariant,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        db_index=True,
+        related_name="branch_inventory",
+    )
+
+    # ── Pricing (branch-specific; 0 for warehouse rows) ─────────────────────
     price = models.FloatField(default=0, blank=True, null=True)
     priceSale = models.FloatField(default=0, blank=True, null=True)
     regular_price = models.FloatField(default=0, blank=True, null=True)
 
-    # Branch-specific stock
-    in_stock = models.IntegerField(default=0)
-    available = models.IntegerField(default=0)
+    # ── Stock quantity (decimal to support fractional / secondary-unit products)
+    quantity = models.DecimalField(
+        max_digits=10,
+        decimal_places=1,
+        default=0,
+        help_text="Stock quantity at this location (supports decimals).",
+    )
 
-    # Keep the same semantics as Product.low_stock_threshold (but branch-tunable later if needed)
     low_stock_threshold = models.PositiveIntegerField(default=20)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -57,12 +102,60 @@ class ProductBranchInventory(models.Model):
         verbose_name_plural = "Product Branch Inventories"
         constraints = [
             models.UniqueConstraint(
-                fields=["product", "branch"], name="uniq_product_branch_inventory"
+                fields=["product", "variant", "warehouse", "branch"],
+                name="uniq_product_branch_inventory",
             )
+        ]
+        indexes = [
+            models.Index(
+                fields=["product", "location"], name="idx_pbi_product_location"
+            ),
+            models.Index(fields=["warehouse", "product"], name="idx_pbi_wh_product"),
+            models.Index(fields=["branch", "product"], name="idx_pbi_branch_product"),
+            models.Index(
+                fields=["companyId", "product"], name="idx_pbi_company_product"
+            ),
         ]
 
     def __str__(self):
-        return f"{self.product_id} @ {self.branch_id}"
+        loc = self.warehouse or self.branch or "unknown"
+        variant_str = f" / {self.variant}" if self.variant_id else ""
+        return f"{self.product_id}{variant_str} @ {loc}: {self.quantity}"
+
+    # ── Backward-compat properties so legacy code reading .in_stock / .available
+    # still works without modification in read paths. ─────────────────────────
+    @property
+    def in_stock(self):
+        return int(self.quantity or 0)
+
+    @property
+    def available(self):
+        return int(self.quantity or 0)
+
+
+# ── Signal: auto-recalculate Product.in_stock on inventory change ─────────────
+
+
+def _recalculate_product_in_stock(product_id):
+    """Sum all ProductBranchInventory.quantity rows and update Product.in_stock."""
+    from django.db.models import Sum as _Sum
+
+    total = (
+        ProductBranchInventory.objects.filter(product_id=product_id).aggregate(
+            total=_Sum("quantity")
+        )["total"]
+    ) or 0
+    Product.objects.filter(pk=product_id).update(in_stock=total)
+
+
+@receiver(post_save, sender=ProductBranchInventory)
+def pbi_post_save(sender, instance, **kwargs):
+    _recalculate_product_in_stock(instance.product_id)
+
+
+@receiver(post_delete, sender=ProductBranchInventory)
+def pbi_post_delete(sender, instance, **kwargs):
+    _recalculate_product_in_stock(instance.product_id)
 
 
 class InventoryCategory(models.Model):

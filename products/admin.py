@@ -19,7 +19,6 @@ from .models.product_model import (
     Tag,
     Color,
     ProductVariant,
-    StockSummary,
     UnitConversionGroup,
 )
 from .models.rating_model import Rating
@@ -47,8 +46,7 @@ class GenericNameByNameOrCreateWidget(ForeignKeyWidget):
             return self.cache[value]
 
         existing = (
-            GenericName.objects.filter(
-                name__iexact=value).order_by("createdAt").first()
+            GenericName.objects.filter(name__iexact=value).order_by("createdAt").first()
         )
         if existing:
             self.cache[value] = existing
@@ -116,8 +114,7 @@ class UnitConversionGroupByNameWidget(ForeignKeyWidget):
             return None
         key = value.lower()
         if key not in self._cache:
-            obj = UnitConversionGroup.objects.filter(
-                name__iexact=value).first()
+            obj = UnitConversionGroup.objects.filter(name__iexact=value).first()
             # Fallback: try numeric PK (ID)
             if obj is None and value.isdigit():
                 obj = UnitConversionGroup.objects.filter(pk=int(value)).first()
@@ -434,9 +431,7 @@ class ProductImportResource(resources.ModelResource):
             pass
 
         if generic_index is not None:
-            existing_generics = set(
-                GenericName.objects.values_list("name", flat=True)
-            )
+            existing_generics = set(GenericName.objects.values_list("name", flat=True))
             generics_to_create = set()
 
             for row in dataset:
@@ -451,10 +446,9 @@ class ProductImportResource(resources.ModelResource):
             if generics_to_create:
                 GenericName.objects.bulk_create(
                     [GenericName(name=name) for name in generics_to_create],
-                    ignore_conflicts=True
+                    ignore_conflicts=True,
                 )
-                print(
-                    f"✓ Pre-created {len(generics_to_create)} GenericName objects")
+                print(f"✓ Pre-created {len(generics_to_create)} GenericName objects")
 
     def before_import_row(self, row, **kwargs):
         """
@@ -469,8 +463,7 @@ class ProductImportResource(resources.ModelResource):
         stock_quantity = row.get("stock_quantity")
         if stock_quantity is not None:
             try:
-                stock_val = int(str(stock_quantity).strip()
-                                ) if stock_quantity else 0
+                stock_val = int(str(stock_quantity).strip()) if stock_quantity else 0
                 row["in_stock"] = max(0, stock_val)
                 row["_import_stock_quantity"] = max(0, stock_val)
             except (ValueError, AttributeError, TypeError):
@@ -488,15 +481,13 @@ class ProductImportResource(resources.ModelResource):
                 row["quantity"] = row.get("in_stock", 0)
 
         # Price field cleanup
-        price_fields = ["price", "priceSale",
-                        "regular_price", "supplier_price", "mrp"]
+        price_fields = ["price", "priceSale", "regular_price", "supplier_price", "mrp"]
         for field in price_fields:
             if field in row:
                 value = row[field]
                 if isinstance(value, str):
                     cleaned = (
-                        value
-                        .replace(",", "")
+                        value.replace(",", "")
                         .replace("৳", "")
                         .replace("$", "")
                         .replace("€", "")
@@ -514,8 +505,7 @@ class ProductImportResource(resources.ModelResource):
         low_stock = row.get("low_stock_threshold")
         if self._has_value(low_stock):
             try:
-                row["low_stock_threshold"] = max(
-                    0, int(str(low_stock).strip()))
+                row["low_stock_threshold"] = max(0, int(str(low_stock).strip()))
             except (ValueError, AttributeError, TypeError):
                 row["low_stock_threshold"] = 20
         else:
@@ -539,10 +529,12 @@ class ProductImportResource(resources.ModelResource):
         if not hasattr(self, "_instances_for_stock"):
             self._instances_for_stock = []
 
-        self._instances_for_stock.append({
-            "instance": instance,
-            "row": kwargs.get("row", {}),
-        })
+        self._instances_for_stock.append(
+            {
+                "instance": instance,
+                "row": kwargs.get("row", {}),
+            }
+        )
 
         super().save_instance(instance, is_new, using_transactions, dry_run, **kwargs)
 
@@ -566,8 +558,7 @@ class ProductImportResource(resources.ModelResource):
             row = item["row"]
 
             if not instance.companyId:
-                print(
-                    f"⚠ Skipping StockSummary for product {instance.id}: no company")
+                print(f"⚠ Skipping StockSummary for product {instance.id}: no company")
                 continue
 
             stock_qty = row.get("_import_stock_quantity") or instance.in_stock
@@ -593,32 +584,32 @@ class ProductImportResource(resources.ModelResource):
                         continue
                 except (Warehouse.DoesNotExist, Branch.DoesNotExist, ValueError):
                     print(
-                        f"⚠ Location not found for product {instance.id}: {location_type} {location_id}")
+                        f"⚠ Location not found for product {instance.id}: {location_type} {location_id}"
+                    )
                     continue
 
                 if warehouse or branch:
                     stock_summaries_to_create.append(
-                        StockSummary(
+                        ProductBranchInventory(
                             product=instance,
                             variant=None,
                             warehouse=warehouse,
                             branch=branch,
-                            company=instance.companyId,
+                            companyId=instance.companyId,
                             location="in_warehouse" if warehouse else "in_branch",
-                            quantity=max(0, int(stock_qty)
-                                         ) if stock_qty else 0,
+                            quantity=max(0, int(stock_qty)) if stock_qty else 0,
                         )
                     )
 
             # Case 2: Use product's warehouse
             elif instance.warehouse:
                 stock_summaries_to_create.append(
-                    StockSummary(
+                    ProductBranchInventory(
                         product=instance,
                         variant=None,
                         warehouse=instance.warehouse,
                         branch=None,
-                        company=instance.companyId,
+                        companyId=instance.companyId,
                         location="in_warehouse",
                         quantity=max(0, int(stock_qty)) if stock_qty else 0,
                     )
@@ -627,12 +618,12 @@ class ProductImportResource(resources.ModelResource):
             # Case 3: Use product's branch
             elif instance.branch:
                 stock_summaries_to_create.append(
-                    StockSummary(
+                    ProductBranchInventory(
                         product=instance,
                         variant=None,
                         warehouse=None,
                         branch=instance.branch,
-                        company=instance.companyId,
+                        companyId=instance.companyId,
                         location="in_branch",
                         quantity=max(0, int(stock_qty)) if stock_qty else 0,
                     )
@@ -645,34 +636,34 @@ class ProductImportResource(resources.ModelResource):
         try:
             with transaction.atomic():
                 print(
-                    f"⏳ Creating {len(stock_summaries_to_create)} StockSummary records...")
-
-                created = StockSummary.objects.bulk_create(
-                    stock_summaries_to_create,
-                    batch_size=2000,
-                    ignore_conflicts=True
+                    f"⏳ Creating {len(stock_summaries_to_create)} StockSummary records..."
                 )
 
-                print(f"✓ Created {len(created)} StockSummary records")
+                created = ProductBranchInventory.objects.bulk_create(
+                    stock_summaries_to_create, batch_size=2000, ignore_conflicts=True
+                )
+
+                print(f"✓ Created {len(created)} ProductBranchInventory records")
 
                 # Recalculate Product.in_stock
                 print(
-                    f"⏳ Recalculating in_stock for {len(affected_product_ids)} products...")
+                    f"⏳ Recalculating in_stock for {len(affected_product_ids)} products..."
+                )
 
                 for product_id in affected_product_ids:
                     total = (
-                        StockSummary.objects.filter(product_id=product_id).aggregate(
-                            total=Sum("quantity")
-                        )["total"]
+                        ProductBranchInventory.objects.filter(
+                            product_id=product_id
+                        ).aggregate(total=Sum("quantity"))["total"]
                     ) or 0
-                    Product.objects.filter(
-                        pk=product_id).update(in_stock=total)
+                    Product.objects.filter(pk=product_id).update(in_stock=total)
 
                 print(
-                    f"✓ Recalculated in_stock for {len(affected_product_ids)} products")
+                    f"✓ Recalculated in_stock for {len(affected_product_ids)} products"
+                )
 
         except Exception as e:
-            print(f"✗ Error creating StockSummary records: {str(e)}")
+            print(f"✗ Error creating ProductBranchInventory records: {str(e)}")
             raise
 
     def import_row(self, row, instance_loader, **kwargs):
@@ -704,8 +695,7 @@ class ProductBranchInventoryAdmin(admin.ModelAdmin):
         "available",
     )
     list_filter = ("branch",)
-    search_fields = ("product__name", "product__code",
-                     "branch__name", "branch__code")
+    search_fields = ("product__name", "product__code", "branch__name", "branch__code")
     autocomplete_fields = ("product", "branch")
     list_per_page = 50
 
@@ -773,8 +763,15 @@ class ProductAdmin(ImportExportModelAdmin):
         "createdAt",
         "updateAt",
     )
-    list_filter = ("status", "companyId", "branch",
-                   "category", "unit", "status", "supplier")
+    list_filter = (
+        "status",
+        "companyId",
+        "branch",
+        "category",
+        "unit",
+        "status",
+        "supplier",
+    )
     search_fields = ("name", "code", "sku", "category", "unit__name")
     list_per_page = 20
     list_editable = ("quantity", "priceSale")
@@ -820,7 +817,18 @@ class ProductAdmin(ImportExportModelAdmin):
             },
         ),
         ("Price", {"fields": ("priceSale", "regular_price", "supplier_price")}),
-        ("Unit", {"fields": ("unit", "display_unit", "unit_conversion_group", "selling_unit", "selling_unit_conversion_factor" )}),
+        (
+            "Unit",
+            {
+                "fields": (
+                    "unit",
+                    "display_unit",
+                    "unit_conversion_group",
+                    "selling_unit",
+                    "selling_unit_conversion_factor",
+                )
+            },
+        ),
         (
             "Category",
             {
@@ -1010,8 +1018,7 @@ class ProductBatchAdmin(admin.ModelAdmin):
         "receivedAt",
     )
     list_filter = ("branch",)
-    search_fields = ("batch_no", "product__name",
-                     "product__sku", "product__code")
+    search_fields = ("batch_no", "product__name", "product__sku", "product__code")
     autocomplete_fields = ("product", "branch", "supplier")
     list_per_page = 50
     list_filter = ("id",)
@@ -1033,12 +1040,8 @@ class ProductSerialItemAdmin(admin.ModelAdmin):
     list_filter = ("status",)
     list_per_page = 50
 
+
 # Inventory Management Admin
-
-
-@admin.register(StockSummary)
-class StockSummaryAdmin(admin.ModelAdmin):
-    list_display = ("product", "quantity", "location")
 
 
 @admin.register(InventoryCategory)
@@ -1071,13 +1074,11 @@ class InventoryItemAdmin(ImportExportModelAdmin):
     fieldsets = (
         (
             "Basic Information",
-            {"fields": ("name", "category", "unit", "sku",
-                        "description", "location")},
+            {"fields": ("name", "category", "unit", "sku", "description", "location")},
         ),
         (
             "Stock Information",
-            {"fields": ("current_stock", "reorder_level",
-                        "max_stock", "status")},
+            {"fields": ("current_stock", "reorder_level", "max_stock", "status")},
         ),
         ("Cost Information", {"fields": ("cost_per_unit", "total_value")}),
         ("Supplier Information", {"fields": ("supplier",)}),

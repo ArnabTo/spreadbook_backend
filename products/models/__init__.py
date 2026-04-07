@@ -5,7 +5,6 @@ from .product_model import (
     Product,
     ProductVariant,
     ProductSerialItem,
-    StockSummary,
     UnitConversionGroup,
     UnitConversionStep,
 )
@@ -33,7 +32,6 @@ __all__ = [
     "Product",
     "ProductVariant",
     "ProductSerialItem",
-    "StockSummary",
     "UnitConversionGroup",
     "UnitConversionStep",
     "Unit",
