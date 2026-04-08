@@ -551,6 +551,26 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(po)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    @action(detail=False, methods=["get"], url_path="stats")
+    def stats(self, request, *args, **kwargs):
+        """Return status-level counts for purchase requisitions."""
+        from django.db.models import Count
+
+        qs = self.get_queryset()
+        rows = qs.values("status").annotate(count=Count("uuid"))
+        status_map = {row["status"]: row["count"] for row in rows}
+        total = sum(status_map.values())
+        return Response(
+            {
+                "total": total,
+                "draft": status_map.get("draft", 0),
+                "pending": status_map.get("pending", 0),
+                "approved": status_map.get("approved", 0),
+                "rejected": status_map.get("rejected", 0),
+                "converted": status_map.get("converted", 0),
+            }
+        )
+
 
 class QuickPurchaseViewSet(viewsets.ModelViewSet):
     """Immediate buy records and conversion into Product stock."""
@@ -1188,3 +1208,32 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
         po.refresh_from_db()
         return Response(self.get_serializer(po).data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["get"], url_path="stats")
+    def stats(self, request, *args, **kwargs):
+        """Return status-level counts and totals for purchase orders,
+        scoped by the same company / branch / warehouse filter as the list view."""
+        from django.db.models import Count, Sum
+
+        qs = self.get_queryset()
+        rows = qs.values("status").annotate(count=Count("uuid"))
+        status_map = {row["status"]: row["count"] for row in rows}
+        total = sum(status_map.values())
+        agg = qs.aggregate(total_amount=Sum("total_amount"))
+        total_amount = float(agg["total_amount"] or 0)
+        paid_count = qs.filter(payment_status="paid").count()
+        return Response(
+            {
+                "total": total,
+                "draft": status_map.get("draft", 0),
+                "pending": status_map.get("pending", 0),
+                "approved": status_map.get("approved", 0),
+                "waiting_for_receive": status_map.get("waiting_for_receive", 0),
+                "received": status_map.get("received", 0),
+                "delivered": status_map.get("delivered", 0),
+                "cancelled": status_map.get("cancelled", 0),
+                "total_amount": total_amount,
+                "paid_count": paid_count,
+                "unpaid_count": total - paid_count,
+            }
+        )

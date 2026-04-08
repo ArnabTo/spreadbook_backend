@@ -32,6 +32,8 @@ from .models.unit_model import Unit
 from suppliers.models import Supplier
 from .function import attempt_json_deserialize
 
+logger = logging.getLogger(__name__)
+
 User = get_user_model()
 
 
