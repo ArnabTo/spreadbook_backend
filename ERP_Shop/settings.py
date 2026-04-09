@@ -564,6 +564,9 @@ MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+# Allow bulk admin actions (e.g. deleting thousands of records at once).
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 100_000
+
 REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": (
         ["rest_framework.permissions.AllowAny"]

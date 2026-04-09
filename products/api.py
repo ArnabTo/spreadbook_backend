@@ -855,6 +855,8 @@ class ProductViewSet(viewsets.ModelViewSet):
                 "variants",
                 # in_stock is included here so the serializer routes it to StockSummary.
                 "in_stock",
+                "supplier",
+                "condition",
             }
             catalog_data = {
                 k: v for k, v in request.data.items() if k in catalog_allowed
@@ -934,6 +936,8 @@ class ProductViewSet(viewsets.ModelViewSet):
                 "variants",
                 # in_stock is included here so the serializer routes it to StockSummary.
                 "in_stock",
+                "supplier",
+                "condition",
             }
             catalog_data = {
                 k: v for k, v in request.data.items() if k in catalog_allowed

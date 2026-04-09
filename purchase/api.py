@@ -730,7 +730,11 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
         po_status = self.request.query_params.get("status")
         if po_status:
-            qs = qs.filter(status=po_status)
+            statuses = [s.strip() for s in po_status.split(",") if s.strip()]
+            if len(statuses) > 1:
+                qs = qs.filter(status__in=statuses)
+            else:
+                qs = qs.filter(status=statuses[0])
 
         user = getattr(self.request, "user", None)
         if user and user.is_authenticated:

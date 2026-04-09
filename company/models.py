@@ -76,13 +76,14 @@ class Company(models.Model):
     subscriptionPlan = models.CharField(
         max_length=50,
         choices=[
+            ("demo", "Demo"),
             ("basic", "Basic"),
             ("professional", "Professional"),
             ("enterprise", "Enterprise"),
         ],
         null=True,
         blank=True,
-        help_text="Subscription plan (basic, professional, enterprise)",
+        help_text="Subscription plan (demo, basic, professional, enterprise)",
     )
     subscriptionStatus = models.CharField(
         max_length=50,

@@ -1,5 +1,5 @@
 from import_export.admin import ImportExportModelAdmin
-from import_export import fields, resources, exceptions
+from import_export import fields, resources
 from import_export.widgets import ForeignKeyWidget
 
 from django.contrib import admin
@@ -336,6 +336,7 @@ class ProductImportResource(resources.ModelResource):
             "category",
             "brand_name",
             "manufacturer",
+            "dosage_form",
             "description",
             "price",
             "priceSale",
@@ -511,14 +512,20 @@ class ProductImportResource(resources.ModelResource):
         else:
             row["low_stock_threshold"] = 20
 
-        # Validate critical fields
-        has_name = self._has_value(row.get("name"))
-        has_code = self._has_value(row.get("code"))
+        # Auto-generate code if missing (company + branch prefix + random suffix)
+        if not self._has_value(row.get("code")):
+            import uuid as _uuid
 
-        if not (has_name or has_code):
-            raise exceptions.ImportError(
-                "Row skipped: must have either 'name' or 'code'"
+            company_val = str(row.get("companyId") or "").strip()
+            branch_val = str(row.get("branch") or "").strip()
+            co_prefix = (
+                (company_val[:3] if company_val else "CO").upper().replace(" ", "")
             )
+            br_prefix = (
+                (branch_val[:3] if branch_val else "BR").upper().replace(" ", "")
+            )
+            suffix = _uuid.uuid4().hex[:6].upper()
+            row["code"] = f"{co_prefix}-{br_prefix}-{suffix}"
 
         # Store location data for StockSummary creation
         row["_import_location_type"] = row.get("location_type")
@@ -773,7 +780,7 @@ class ProductAdmin(ImportExportModelAdmin):
         "supplier",
     )
     search_fields = ("name", "code", "sku", "category", "unit__name")
-    list_per_page = 20
+    list_per_page =1000
     list_editable = ("quantity", "priceSale")
     filter_horizontal = ("sizes",)
     ordering = ("-createdAt",)
