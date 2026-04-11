@@ -392,6 +392,7 @@ class POSOrderSerializer(serializers.ModelSerializer):
 
     items = POSOrderItemSerializer(many=True, write_only=True)
     order_items = POSOrderItemSerializer(many=True, read_only=True, source="items")
+    refund_count = serializers.IntegerField(read_only=True)
 
     # Add properties for new field names
     subtotal = serializers.FloatField(source="subTotal", read_only=True)
@@ -453,6 +454,7 @@ class POSOrderSerializer(serializers.ModelSerializer):
             "total_amount",
             "is_paid",
             "is_return",
+            "refund_count",
             "kot_printed",
             "advance",
             "due",
@@ -821,6 +823,11 @@ class POSOrderCreateSerializer(serializers.Serializer):
         max_digits=10, decimal_places=2, default=0, required=False
     )
     promo_code = serializers.CharField(max_length=50, required=False, allow_blank=True)
+
+    # Exchange credit (from refund/exchange workflow)
+    exchange_credit_amount = serializers.DecimalField(
+        max_digits=10, decimal_places=2, required=False, allow_null=True
+    )
 
     # Tip / service charge
     tip_amount = serializers.DecimalField(
@@ -1618,6 +1625,10 @@ class POSOrderCreateSerializer(serializers.Serializer):
             discount_type = validated_data.get("discount_type", "none")
             discount_value = Decimal(str(validated_data.get("discount_value", 0)))
             promo_code = validated_data.get("promo_code", "")
+            # Extract exchange credit amount (from refund/exchange workflow)
+            exchange_credit_amount = Decimal(
+                str(validated_data.get("exchange_credit_amount", 0) or 0)
+            )
 
             # Calculate discount amount
             discount_amount = Decimal("0.00")
@@ -1671,6 +1682,14 @@ class POSOrderCreateSerializer(serializers.Serializer):
                     # Log error but don't fail the order
                     print(f"Error applying promo code: {e}")
                     discount_amount = Decimal("0.00")
+
+            # Include exchange credit in the total discount applied
+            # (e.g., from refund/exchange workflow where customer has store credit)
+            if exchange_credit_amount > Decimal("0"):
+                # Don't apply more credit than what remains after other discounts
+                available_for_credit = max(subtotal - discount_amount, Decimal("0"))
+                credit_applied = min(exchange_credit_amount, available_for_credit)
+                discount_amount += credit_applied
 
             # Apply discount to subtotal
             after_discount = subtotal - discount_amount
@@ -1739,13 +1758,17 @@ class POSOrderCreateSerializer(serializers.Serializer):
                         }
                     )
 
-                # When a discount/promo lowers the total, the server-computed order_total
-                # may not match the client-computed total (e.g. promo lookup fails silently).
+                # When a discount/promo/exchange-credit lowers the total, the server-computed order_total
+                # may not match the client-computed total (e.g. promo lookup fails silently, or exchange credit was applied).
                 # In that case, use the client-provided change_amount to determine sufficiency:
                 # change_amount >= 0 means the customer paid at least the discounted total.
                 client_change = validated_data.get("change_amount")
+                # Trust change_amount if discount, promo code, or exchange credit was applied
+                has_discount_or_exchange = (
+                    has_discount or exchange_credit_amount > Decimal("0")
+                )
                 discount_paid_enough = (
-                    has_discount
+                    has_discount_or_exchange
                     and client_change is not None
                     and Decimal(str(client_change)) >= Decimal("0")
                 )

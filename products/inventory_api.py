@@ -417,6 +417,10 @@ class StockSummaryInventoryView(APIView):
         if supplier:
             qs = qs.filter(product__supplier_id=supplier)
 
+        manufacturer = request.query_params.get("manufacturer")
+        if manufacturer:
+            qs = qs.filter(product__manufacturer__iexact=manufacturer)
+
         inventory_type = request.query_params.get(
             "inventoryType"
         ) or request.query_params.get("status")
@@ -434,7 +438,7 @@ class StockSummaryInventoryView(APIView):
                 product_rows[pid] = product_entry
 
             product_entry["rows"].append(row)
-            product_entry["current_stock"] += float(row.quantity or 0)
+            product_entry["current_stock"] += max(float(row.quantity or 0), 0.0)
 
         def format_timestamp(value):
             if not value:
@@ -468,7 +472,7 @@ class StockSummaryInventoryView(APIView):
         items = []
         for pid, group in product_rows.items():
             product = group["product"]
-            current_stock = group["current_stock"]
+            current_stock = max(group["current_stock"], 0)
             low_stock_threshold = int(product.low_stock_threshold or 20)
             max_stock = int(product.quantity or low_stock_threshold * 5 or 100)
             cost_per_unit = float(product.supplier_price or product.price or 0)
@@ -486,7 +490,7 @@ class StockSummaryInventoryView(APIView):
                             "size": row.variant.size,
                             "size_name": row.variant.size_name,
                             "size_code": row.variant.size_code,
-                            "size_qty": float(row.quantity or 0),
+                            "size_qty": max(float(row.quantity or 0), 0.0),
                             "color": row.variant.color,
                             "price": float(row.variant.price or 0),
                             "supplier_price": float(row.variant.supplier_price or 0),

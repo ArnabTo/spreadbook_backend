@@ -140,6 +140,7 @@ class PurchaseOrderItemSerializer(serializers.ModelSerializer):
             "quantity",
             "unit",
             "unit_price",
+            "selling_price",
             "total_price",
             "expiry_date",
             "warranty_expiry_date",
@@ -180,6 +181,7 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
     )
     items_count = serializers.SerializerMethodField()
     total_quantity = serializers.SerializerMethodField()
+    due_amount = serializers.SerializerMethodField()
 
     class Meta:
         model = PurchaseOrder
@@ -203,6 +205,7 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
             "notes",
             "created_by",
             "payment_status",
+            "due_amount",
             "items",
             "items_count",
             "total_quantity",
@@ -221,6 +224,12 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
 
     def get_items_count(self, obj):
         return obj.items.count()
+
+    def get_due_amount(self, obj):
+        try:
+            return str(obj.ledger.balance)
+        except Exception:
+            return str(obj.total_amount)
 
     def get_total_quantity(self, obj):
         from decimal import Decimal

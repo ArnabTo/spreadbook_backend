@@ -216,8 +216,12 @@ class PurchaseOrder(Timestamp):
     total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     notes = models.TextField(null=True, blank=True)
     payment_status = models.CharField(
-        max_length=10,
-        choices=[("unpaid", "Unpaid"), ("paid", "Paid")],
+        max_length=20,
+        choices=[
+            ("unpaid", "Unpaid"),
+            ("partially_paid", "Partially Paid"),
+            ("paid", "Paid"),
+        ],
         default="unpaid",
     )
     created_by = models.CharField(max_length=150, null=True, blank=True)
@@ -284,6 +288,12 @@ class PurchaseOrderItem(models.Model):
     quantity = models.DecimalField(max_digits=10, decimal_places=2)
     unit = models.CharField(max_length=50)
     unit_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    selling_price = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        help_text="Product selling price at the time of PO creation",
+    )
     total_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     item_status = models.CharField(
         max_length=10,

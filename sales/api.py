@@ -409,8 +409,10 @@ class POSOrderViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         """Filter orders based on query parameters"""
-        queryset = Sale.objects.filter(order_number__isnull=False).order_by(
-            "-order_time"
+        queryset = (
+            Sale.objects.filter(order_number__isnull=False)
+            .annotate(refund_count=Count("refunds", distinct=True))
+            .order_by("-order_time")
         )
 
         # Filter by order type

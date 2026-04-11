@@ -3,6 +3,7 @@ from decimal import Decimal
 from django.conf import settings
 from django.db import transaction
 from django.db.models import F
+from django.utils.timezone import localdate
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
@@ -693,7 +694,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = (
             PurchaseOrder.objects.select_related(
-                "supplier", "requisition", "branch", "warehouse", "companyId"
+                "supplier", "requisition", "branch", "warehouse", "companyId", "ledger"
             )
             .prefetch_related(
                 "items__product", "items__variant", "items__inventory_item"
@@ -1098,19 +1099,83 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"], url_path="mark-paid")
     def mark_paid(self, request, *args, **kwargs):
-        """Mark this purchase order as paid."""
+        """Record supplier payment for this PO and update payment status."""
         po: PurchaseOrder = self.get_object()
-        po.payment_status = "paid"
-        po.save(update_fields=["payment_status", "updated_at"])
-        return Response(self.get_serializer(po).data, status=status.HTTP_200_OK)
+        if po.supplier_id is None:
+            return Response(
+                {"detail": "Cannot record payment: purchase order has no supplier."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        amount_raw = request.data.get("amount")
+        remarks = (request.data.get("remarks") or "").strip()
+        payment_method = (
+            request.data.get("payment_method") or "cash"
+        ).strip() or "cash"
+
+        try:
+            amount = Decimal(str(amount_raw))
+        except Exception:
+            return Response(
+                {"detail": "Valid payment amount is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if amount <= Decimal("0"):
+            return Response(
+                {"detail": "Payment amount must be greater than 0."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from supplier_ledger.models import SupplierLedger, SupplierPayment
+
+        ledger = SupplierLedger.objects.filter(purchase_order=po).first()
+        if ledger is None:
+            return Response(
+                {"detail": "Supplier ledger entry not found for this purchase order."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        ledger.recalc()
+        if amount > (ledger.balance or Decimal("0")):
+            return Response(
+                {"detail": "Payment amount cannot exceed remaining due amount."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            SupplierPayment.objects.create(
+                ledger=ledger,
+                amount=amount,
+                payment_method=payment_method,
+                payment_date=localdate(),
+                reference=po.po_number or "",
+                notes=remarks or None,
+            )
+            ledger.refresh_from_db()
+
+            if ledger.balance <= Decimal("0"):
+                po.payment_status = "paid"
+            elif ledger.credit_amount > Decimal("0"):
+                po.payment_status = "partially_paid"
+            else:
+                po.payment_status = "unpaid"
+            po.save(update_fields=["payment_status", "updated_at"])
+
+        # Re-fetch from DB so the serializer reads the updated ledger balance
+        # (the po instance has a stale cached ledger from select_related on get_object)
+        fresh_po = self.get_queryset().get(pk=po.pk)
+        return Response(self.get_serializer(fresh_po).data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"], url_path="receive-item")
     def receive_item_action(self, request, *args, **kwargs):
         """Receive a single PO item by uuid. Auto-sets PO status to received when all done."""
         po: PurchaseOrder = self.get_object()
-        if po.status != "approved":
+        if po.status not in {"approved", "waiting_for_receive"}:
             return Response(
-                {"detail": "Purchase order must be approved to receive items."},
+                {
+                    "detail": "Purchase order must be approved or waiting for receive to receive items."
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -1168,9 +1233,11 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
     def receive_all_items_action(self, request, *args, **kwargs):
         """Receive all pending items for this PO at once."""
         po: PurchaseOrder = self.get_object()
-        if po.status != "approved":
+        if po.status not in {"approved", "waiting_for_receive"}:
             return Response(
-                {"detail": "Purchase order must be approved to receive items."},
+                {
+                    "detail": "Purchase order must be approved or waiting for receive to receive items."
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

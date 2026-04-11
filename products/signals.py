@@ -85,8 +85,7 @@ def create_purchase_order_from_product(sender, instance: Product, created, **kwa
     """
 
     current_supplier_id = getattr(instance, "supplier_id", None)
-    current_supplier_price = _safe_decimal(
-        getattr(instance, "supplier_price", 0))
+    current_supplier_price = _safe_decimal(getattr(instance, "supplier_price", 0))
     prev_supplier_id = getattr(instance, "_prev_supplier_id_for_po", None)
     prev_supplier_price = _safe_decimal(
         getattr(instance, "_prev_supplier_price_for_po", None)
@@ -102,10 +101,21 @@ def create_purchase_order_from_product(sender, instance: Product, created, **kwa
 
     def _process_po():
         with transaction.atomic():
+            # Re-fetch product from DB so in_stock reflects the value written by
+            # StockSummary signals (product was created with in_stock=0 initially).
+            try:
+                fresh = Product.objects.get(pk=instance.pk)
+            except Product.DoesNotExist:
+                return
+
+            fresh_supplier_price = _safe_decimal(getattr(fresh, "supplier_price", 0))
+            fresh_selling_price = _safe_decimal(
+                getattr(fresh, "priceSale", None) or getattr(fresh, "price", 0)
+            )
+
             # Check if product already has a PO (for update case)
             existing_po = (
-                PurchaseOrder.objects.filter(
-                    notes__contains=f"Product {instance.id}")
+                PurchaseOrder.objects.filter(notes__contains=f"Product {instance.id}")
                 .order_by("-created_at")
                 .first()
             )
@@ -113,21 +123,17 @@ def create_purchase_order_from_product(sender, instance: Product, created, **kwa
             if existing_po and not created and supplier_changed:
                 # Update existing PO with new supplier
                 existing_po.supplier_id = current_supplier_id
-                existing_po.branch_id = getattr(instance, "branch_id", None)
-                existing_po.warehouse_id = getattr(
-                    instance, "warehouse_id", None)
-                existing_po.companyId_id = getattr(
-                    instance, "companyId_id", None)
+                existing_po.branch_id = getattr(fresh, "branch_id", None)
+                existing_po.warehouse_id = getattr(fresh, "warehouse_id", None)
+                existing_po.companyId_id = getattr(fresh, "companyId_id", None)
                 po = existing_po
                 # Delete old items to recreate
                 existing_po.items.all().delete()
             elif existing_po and not created and price_changed:
                 # Update existing PO with new price
-                existing_po.branch_id = getattr(instance, "branch_id", None)
-                existing_po.warehouse_id = getattr(
-                    instance, "warehouse_id", None)
-                existing_po.companyId_id = getattr(
-                    instance, "companyId_id", None)
+                existing_po.branch_id = getattr(fresh, "branch_id", None)
+                existing_po.warehouse_id = getattr(fresh, "warehouse_id", None)
+                existing_po.companyId_id = getattr(fresh, "companyId_id", None)
                 po = existing_po
                 # Delete old items to recreate
                 existing_po.items.all().delete()
@@ -135,15 +141,15 @@ def create_purchase_order_from_product(sender, instance: Product, created, **kwa
                 # Create new PO
                 po = PurchaseOrder.objects.create(
                     supplier_id=current_supplier_id,
-                    branch_id=getattr(instance, "branch_id", None),
-                    warehouse_id=getattr(instance, "warehouse_id", None),
-                    companyId_id=getattr(instance, "companyId_id", None),
+                    branch_id=getattr(fresh, "branch_id", None),
+                    warehouse_id=getattr(fresh, "warehouse_id", None),
+                    companyId_id=getattr(fresh, "companyId_id", None),
                     status="pending",
-                    notes=f"Auto-created from Product {instance.name or instance.id}",
+                    notes=f"Auto-created from Product {fresh.name or fresh.id}",
                     created_by="system:product-signal",
                 )
 
-            variants = list(instance.variants.all())
+            variants = list(fresh.variants.all())
 
             total_amount = Decimal("0")
 
@@ -155,8 +161,7 @@ def create_purchase_order_from_product(sender, instance: Product, created, **kwa
                     if getattr(variant, "color", None):
                         variant_desc_parts.append(f"color={variant.color}")
                     if getattr(variant, "size_name", None):
-                        variant_desc_parts.append(
-                            f"size_name={variant.size_name}")
+                        variant_desc_parts.append(f"size_name={variant.size_name}")
                     if getattr(variant, "size_code", None):
                         variant_desc_parts.append(f"code={variant.size_code}")
 
@@ -168,46 +173,56 @@ def create_purchase_order_from_product(sender, instance: Product, created, **kwa
 
                     # Use variant.supplier_price if available, otherwise Product.supplier_price
                     variant_supplier_price = _safe_decimal(
-                        getattr(variant, "supplier_price", None)
-                        or current_supplier_price
+                        getattr(variant, "supplier_price", None) or fresh_supplier_price
+                    )
+                    variant_selling_price = _safe_decimal(
+                        getattr(variant, "price", None) or fresh_selling_price
                     )
                     quantity = _safe_decimal(getattr(variant, "size_qty", 0))
 
                     PurchaseOrderItem.objects.create(
                         purchase_order=po,
-                        product=instance,
+                        product=fresh,
                         variant=variant,
                         variant_size=getattr(variant, "size", None) or None,
                         variant_color=getattr(variant, "color", None) or None,
-                        variant_unique_code=getattr(
-                            variant, "unique_code", None) or None,
-                        name=f"{instance.name or 'Product'}{variant_suffix}",
+                        variant_unique_code=getattr(variant, "unique_code", None)
+                        or None,
+                        name=f"{fresh.name or 'Product'}{variant_suffix}",
                         quantity=quantity,
-                        unit=str(getattr(instance, "unit", None) or "unit"),
+                        unit=str(getattr(fresh, "unit", None) or "unit"),
                         unit_price=variant_supplier_price,
+                        selling_price=variant_selling_price,
                     )
 
                     # Add to total amount
                     total_amount += quantity * variant_supplier_price
             else:
-                # Use in_stock (Initial Stock) as quantity for products without variants
-                quantity = _safe_decimal(getattr(instance, "in_stock", 0))
+                # Use in_stock as quantity (now from fresh DB read, not stale instance)
+                quantity = _safe_decimal(getattr(fresh, "in_stock", 0))
                 PurchaseOrderItem.objects.create(
                     purchase_order=po,
-                    product=instance,
-                    name=instance.name or "Product",
+                    product=fresh,
+                    name=fresh.name or "Product",
                     quantity=quantity,
-                    unit=str(getattr(instance, "unit", None) or "unit"),
-                    unit_price=current_supplier_price,
+                    unit=str(getattr(fresh, "unit", None) or "unit"),
+                    unit_price=fresh_supplier_price,
+                    selling_price=fresh_selling_price,
                 )
                 # Add to total amount
-                total_amount += quantity * current_supplier_price
+                total_amount += quantity * fresh_supplier_price
 
             # Set the calculated total amount
             po.total_amount = total_amount
             po.save(
-                update_fields=["total_amount", "updated_at",
-                               "supplier_id", "branch_id", "warehouse_id", "companyId_id"]
+                update_fields=[
+                    "total_amount",
+                    "updated_at",
+                    "supplier_id",
+                    "branch_id",
+                    "warehouse_id",
+                    "companyId_id",
+                ]
             )
 
     transaction.on_commit(_process_po)
@@ -237,6 +252,7 @@ def auto_generate_serial_items(sender, instance: ProductVariant, created, **kwar
     def _create_serials():
         import random as _random
         import string as _string
+
         # Mirror ProductSerialItem.save() prefix logic for pre-generating codes
         if instance.unique_code:
             base = instance.unique_code
@@ -262,20 +278,23 @@ def auto_generate_serial_items(sender, instance: ProductVariant, created, **kwar
         items = []
         for _ in range(to_create):
             while True:
-                suffix = ''.join(_random.choices(
-                    _string.digits + _string.ascii_uppercase, k=6))
+                suffix = "".join(
+                    _random.choices(_string.digits + _string.ascii_uppercase, k=6)
+                )
                 code = f"{base}-{suffix}"
                 if code not in used_codes:
                     used_codes.add(code)
                     break
-            items.append(ProductSerialItem(
-                product=instance.product,
-                variant=instance,
-                warehouse_id=warehouse_id,
-                status="in_warehouse",
-                serial_code=code,
-                purchase_order_id=po_id,
-            ))
+            items.append(
+                ProductSerialItem(
+                    product=instance.product,
+                    variant=instance,
+                    warehouse_id=warehouse_id,
+                    status="in_warehouse",
+                    serial_code=code,
+                    purchase_order_id=po_id,
+                )
+            )
         ProductSerialItem.objects.bulk_create(items, batch_size=500)
 
     transaction.on_commit(_create_serials)

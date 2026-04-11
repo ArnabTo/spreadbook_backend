@@ -196,7 +196,7 @@ def adjust_branch_stock(
     if inv is None:
         # Fallback for legacy flows (no branch)
         prev = int(getattr(product, "in_stock", 0) or 0)
-        new = prev + int(delta)
+        new = max(prev + int(delta), 0)
         product.in_stock = new
         product.available = new
         try:
@@ -218,7 +218,7 @@ def adjust_branch_stock(
     from decimal import Decimal as _D
 
     prev = int(inv.quantity or 0)
-    new = prev + int(delta)
+    new = max(prev + int(delta), 0)
     inv.quantity = _D(str(new))
     inv.save(update_fields=["quantity", "updated_at"])
     # Signal (pbi_post_save) automatically recalculates Product.in_stock.

@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Purchase, PurchaseRequisition, PurchaseOrder
+from .models import Purchase, PurchaseRequisition, PurchaseOrder, PurchaseOrderItem
 
 
 @admin.register(Purchase)
@@ -42,4 +42,9 @@ class PurchaseRequisitionAdmin(admin.ModelAdmin):
 @admin.register(PurchaseOrder)
 class PurchaseOrderAdmin(admin.ModelAdmin):
      list_display = ('po_number', )
+     list_per_page = 10
+
+@admin.register(PurchaseOrderItem)
+class PurchaseOrderItemAdmin(admin.ModelAdmin):
+     list_display = ('product', 'quantity',)
      list_per_page = 10

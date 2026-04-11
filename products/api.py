@@ -58,6 +58,7 @@ from common.drf_scoping import (
     get_allowed_branch_ids_for_user,
 )
 from rest_framework.exceptions import PermissionDenied
+from company.models import Company
 
 from decimal import Decimal
 import logging
@@ -115,7 +116,20 @@ class ProductOptionsView(APIView):
             company_id_field="companyId_id",
             branch_id_field=None,
         ).order_by("name")
-        units_qs = Unit.objects.filter(status=True).order_by("name")
+        requested_company_id = request.query_params.get(
+            "company_id"
+        ) or request.query_params.get("companyId")
+        units_qs = Unit.objects.filter(status=True)
+        if is_unrestricted_user(request.user):
+            if requested_company_id:
+                units_qs = units_qs.filter(companyId_id=requested_company_id)
+        else:
+            company_ids = get_company_ids_for_user(request.user)
+            if company_ids:
+                units_qs = units_qs.filter(companyId_id__in=list(company_ids))
+            else:
+                units_qs = units_qs.none()
+        units_qs = units_qs.order_by("name")
 
         return Response(
             {
@@ -134,8 +148,62 @@ class UnitViewSet(viewsets.ModelViewSet):
     serializer_class = UnitSerializer
     http_method_names = ["get", "post", "patch", "put", "delete", "head", "options"]
 
+    def _requested_company_id(self):
+        return (
+            self.request.query_params.get("company_id")
+            or self.request.query_params.get("companyId")
+            or self.request.data.get("company_id")
+            or self.request.data.get("companyId")
+        )
+
+    def _resolve_company_for_write(self):
+        user = self.request.user
+        requested_company_id = self._requested_company_id()
+
+        if requested_company_id:
+            if not is_unrestricted_user(user):
+                allowed_company_ids = get_company_ids_for_user(user)
+                if (
+                    not allowed_company_ids
+                    or str(requested_company_id) not in allowed_company_ids
+                ):
+                    raise PermissionDenied("You do not have access to this company")
+            company = Company.objects.filter(id=requested_company_id).first()
+            if company is None:
+                raise serializers.ValidationError("Invalid company_id")
+            return company
+
+        if getattr(user, "companyId", None):
+            return user.companyId
+
+        if not is_unrestricted_user(user):
+            allowed_company_ids = list(get_company_ids_for_user(user))
+            if len(allowed_company_ids) == 1:
+                return Company.objects.filter(id=allowed_company_ids[0]).first()
+
+        raise serializers.ValidationError("company_id is required")
+
     def get_queryset(self):
-        return Unit.objects.all().order_by("name")
+        qs = Unit.objects.all()
+        requested_company_id = self._requested_company_id()
+        user = self.request.user
+
+        if is_unrestricted_user(user):
+            if requested_company_id:
+                qs = qs.filter(companyId_id=requested_company_id)
+            return qs.order_by("name")
+
+        allowed_company_ids = get_company_ids_for_user(user)
+        if not allowed_company_ids:
+            return qs.none()
+        qs = qs.filter(companyId_id__in=list(allowed_company_ids))
+
+        if requested_company_id:
+            if str(requested_company_id) not in allowed_company_ids:
+                raise PermissionDenied("You do not have access to this company")
+            qs = qs.filter(companyId_id=requested_company_id)
+
+        return qs.order_by("name")
 
     def create(self, request, *args, **kwargs):
         # Normalise name: strip whitespace, reject blank.
@@ -147,11 +215,12 @@ class UnitViewSet(viewsets.ModelViewSet):
 
         # Return existing unit if name already taken (case-insensitive), so the
         # frontend can simply auto-select it without special-casing duplicates.
-        existing = Unit.objects.filter(name__iexact=name).first()
+        company = self._resolve_company_for_write()
+        existing = Unit.objects.filter(companyId=company, name__iexact=name).first()
         if existing:
             return Response(UnitSerializer(existing).data, status=status.HTTP_200_OK)
 
-        unit = Unit.objects.create(name=name, status=True)
+        unit = Unit.objects.create(companyId=company, name=name, status=True)
         return Response(UnitSerializer(unit).data, status=status.HTTP_201_CREATED)
 
 
@@ -1169,8 +1238,39 @@ class ProductViewSet(viewsets.ModelViewSet):
         qs = ProductStockMovement.objects.filter(product=product).order_by(
             "-created_at"
         )
-        ser = ProductStockMovementSerializer(qs, many=True)
-        return Response(ser.data)
+
+        # Backward-compatible behavior:
+        # - No page/page_size query params -> return full list (legacy clients)
+        # - page/page_size present        -> return paginated payload for load-more UIs
+        page_param = request.query_params.get("page")
+        page_size_param = request.query_params.get("page_size")
+        if page_param is None and page_size_param is None:
+            ser = ProductStockMovementSerializer(qs, many=True)
+            return Response(ser.data)
+
+        try:
+            page = max(1, int(page_param or 1))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = min(200, max(1, int(page_size_param or 50)))
+        except (TypeError, ValueError):
+            page_size = 50
+
+        total = qs.count()
+        start = (page - 1) * page_size
+        end = start + page_size
+        rows = qs[start:end]
+
+        ser = ProductStockMovementSerializer(rows, many=True)
+        return Response(
+            {
+                "count": total,
+                "next": (page + 1) if end < total else None,
+                "previous": (page - 1) if page > 1 else None,
+                "results": ser.data,
+            }
+        )
 
 
 class ProductPostSet(viewsets.ModelViewSet):
@@ -1427,8 +1527,36 @@ class ProductPostSet(viewsets.ModelViewSet):
         qs = ProductStockMovement.objects.filter(product=product).order_by(
             "-created_at"
         )
-        ser = ProductStockMovementSerializer(qs, many=True)
-        return Response(ser.data)
+
+        page_param = request.query_params.get("page")
+        page_size_param = request.query_params.get("page_size")
+        if page_param is None and page_size_param is None:
+            ser = ProductStockMovementSerializer(qs, many=True)
+            return Response(ser.data)
+
+        try:
+            page = max(1, int(page_param or 1))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = min(200, max(1, int(page_size_param or 50)))
+        except (TypeError, ValueError):
+            page_size = 50
+
+        total = qs.count()
+        start = (page - 1) * page_size
+        end = start + page_size
+        rows = qs[start:end]
+
+        ser = ProductStockMovementSerializer(rows, many=True)
+        return Response(
+            {
+                "count": total,
+                "next": (page + 1) if end < total else None,
+                "previous": (page - 1) if page > 1 else None,
+                "results": ser.data,
+            }
+        )
 
 
 class ProductSerialItemViewSet(viewsets.ModelViewSet):

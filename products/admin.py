@@ -359,6 +359,12 @@ class ProductImportResource(resources.ModelResource):
         report_skipped = True
         skip_unchanged = False
 
+    def get_bulk_update_fields(self):
+        """Restrict bulk update to real Product model fields only."""
+        model_fields = {f.name for f in self._meta.model._meta.get_fields()}
+        base_fields = super().get_bulk_update_fields()
+        return [field_name for field_name in base_fields if field_name in model_fields]
+
     def _resolve_company(self, raw_value):
         """Resolve company lookup values to a Company instance or None."""
         if raw_value is None:
@@ -410,6 +416,40 @@ class ProductImportResource(resources.ModelResource):
         """Check if a value is non-empty."""
         return value is not None and str(value).strip() != ""
 
+    def _row_has_meaningful_data(self, row):
+        """Return True when at least one real product input column has a value."""
+        meaningful_keys = (
+            "name",
+            "code",
+            "sku",
+            "category",
+            "generic_name",
+            "brand_name",
+            "manufacturer",
+            "description",
+            "dosage_form",
+            "strength",
+            "price",
+            "priceSale",
+            "regular_price",
+            "supplier_price",
+            "mrp",
+            "taxes",
+            "quantity",
+            "in_stock",
+            "stock_quantity",
+            "companyId",
+            "branch",
+            "unit",
+            "display_unit",
+            "unit_conversion_group",
+            "location_type",
+            "location_id",
+            "mfg_date",
+            "exp_date",
+        )
+        return any(self._has_value(row.get(key)) for key in meaningful_keys)
+
     def before_import(self, dataset, using_transactions, dry_run, **kwargs):
         """Normalize headers and pre-create shared references."""
         if not dataset.headers:
@@ -423,6 +463,24 @@ class ProductImportResource(resources.ModelResource):
             )
             normalized_headers.append(mapped_field)
         dataset.headers = normalized_headers
+
+        # Remove empty worksheet tail rows up front so the preview does not show
+        # thousands of skipped rows from Excel's expanded used-range.
+        original_rows = list(dataset)
+        kept_rows = []
+        for raw_row in original_rows:
+            row_dict = {
+                normalized_headers[idx]: raw_row[idx] if idx < len(raw_row) else None
+                for idx in range(len(normalized_headers))
+            }
+            if self._row_has_meaningful_data(row_dict):
+                kept_rows.append(raw_row)
+
+        removed_empty_rows = len(original_rows) - len(kept_rows)
+        if removed_empty_rows > 0:
+            del dataset[:]
+            dataset.extend(kept_rows)
+            print(f"✓ Ignored {removed_empty_rows} empty spreadsheet rows")
 
         # Pre-create GenericName objects in bulk
         generic_index = None
@@ -459,6 +517,12 @@ class ProductImportResource(resources.ModelResource):
         - Set low_stock_threshold
         - Validate critical fields
         """
+
+        # Skip blank spreadsheet rows (common with formatted Excel ranges).
+        # Without this guard, auto-generated code would convert blank rows into creates.
+        if not self._row_has_meaningful_data(row):
+            row["_skip_import_row"] = True
+            return
 
         # Stock quantity mapping
         stock_quantity = row.get("stock_quantity")
@@ -530,6 +594,17 @@ class ProductImportResource(resources.ModelResource):
         # Store location data for StockSummary creation
         row["_import_location_type"] = row.get("location_type")
         row["_import_location_id"] = row.get("location_id")
+
+    def skip_row(self, instance, original, row, import_validation_errors=None):
+        """Skip rows flagged as empty during preprocessing."""
+        if row.get("_skip_import_row"):
+            return True
+        return super().skip_row(
+            instance,
+            original,
+            row,
+            import_validation_errors=import_validation_errors,
+        )
 
     def save_instance(self, instance, is_new, using_transactions, dry_run, **kwargs):
         """Collect instances for bulk StockSummary creation."""
@@ -684,6 +759,7 @@ class ProductImportResource(resources.ModelResource):
             "_import_stock_quantity",
             "_import_location_type",
             "_import_location_id",
+            "_skip_import_row",
         }
 
         cleaned_row = {k: v for k, v in row.items() if k in allowed_keys}
@@ -780,7 +856,7 @@ class ProductAdmin(ImportExportModelAdmin):
         "supplier",
     )
     search_fields = ("name", "code", "sku", "category", "unit__name")
-    list_per_page =1000
+    list_per_page = 1000
     list_editable = ("quantity", "priceSale")
     filter_horizontal = ("sizes",)
     ordering = ("-createdAt",)
