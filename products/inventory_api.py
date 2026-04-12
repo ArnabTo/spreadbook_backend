@@ -558,6 +558,7 @@ class StockSummaryInventoryView(APIView):
                     "manufacturer": product.manufacturer or "",
                     "size": product.size or "",
                     "condition": product.condition or "good",
+                    "refundable": bool(getattr(product, "refundable", True)),
                     "secondary_unit": product.secondary_unit_id,
                     "secondary_unit_name": (
                         getattr(product.secondary_unit, "name", None)

@@ -885,6 +885,7 @@ class ProductAdmin(ImportExportModelAdmin):
                     "taxes",
                     "inventoryType",
                     "sku",
+                    "refundable",
                     "dosage_form",
                     "price",
                     "coverUrl",

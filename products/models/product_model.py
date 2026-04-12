@@ -175,6 +175,10 @@ class Product(Timestamp):
         db_index=True,
         help_text="Physical condition of the product: good or defective",
     )
+    refundable = models.BooleanField(
+        default=True,
+        help_text="Whether this product can be refunded/returned.",
+    )
 
     name = models.CharField(max_length=100, null=True, blank=True)
     # NOTE: code is unique per company (not globally) to support multi-tenant catalogs.

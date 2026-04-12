@@ -926,6 +926,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                 "in_stock",
                 "supplier",
                 "condition",
+                "refundable",
             }
             catalog_data = {
                 k: v for k, v in request.data.items() if k in catalog_allowed
@@ -1007,6 +1008,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                 "in_stock",
                 "supplier",
                 "condition",
+                "refundable",
             }
             catalog_data = {
                 k: v for k, v in request.data.items() if k in catalog_allowed

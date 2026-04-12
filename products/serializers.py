@@ -1168,6 +1168,7 @@ class StockSummaryInventorySerializer(serializers.Serializer):
     )
     size = serializers.CharField(read_only=True, allow_null=True, allow_blank=True)
     condition = serializers.CharField(read_only=True, allow_null=True, allow_blank=True)
+    refundable = serializers.BooleanField(read_only=True)
     secondary_unit = serializers.CharField(read_only=True, allow_null=True)
     secondary_unit_name = serializers.CharField(read_only=True, allow_null=True)
     unit_conversion_factor = serializers.FloatField(read_only=True)

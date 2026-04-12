@@ -329,6 +329,7 @@ class POSOrderItemSerializer(serializers.ModelSerializer):
     priceSale = serializers.SerializerMethodField(read_only=True)
     supplier_price = serializers.SerializerMethodField(read_only=True)
     unit_name = serializers.SerializerMethodField(read_only=True)
+    refundable = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = InvoiceItem
@@ -346,6 +347,7 @@ class POSOrderItemSerializer(serializers.ModelSerializer):
             "priceSale",
             "supplier_price",
             "unit_name",
+            "refundable",
             "preparation_time",
             "special_instructions",
             "status",
@@ -375,6 +377,12 @@ class POSOrderItemSerializer(serializers.ModelSerializer):
             except Exception:
                 pass
         return None
+
+    def get_refundable(self, obj):
+        product = _get_product_for_invoice_item(obj)
+        if not product:
+            return True
+        return bool(getattr(product, "refundable", True))
 
     def validate(self, data):
         """Validate order item data"""
