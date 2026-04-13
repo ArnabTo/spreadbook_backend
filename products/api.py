@@ -1986,3 +1986,4 @@ class StockTransferViewSet(viewsets.ModelViewSet):
         transfer.status = "cancelled"
         transfer.save(update_fields=["status", "updated_at"])
         return Response(StockTransferSerializer(transfer).data)
+
