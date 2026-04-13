@@ -4,6 +4,8 @@ from ckeditor.fields import RichTextField
 from django_countries.fields import CountryField
 import uuid
 
+from decimal import Decimal
+
 from django.db import models
 from suppliers.models import Supplier
 from utils import random
@@ -182,10 +184,12 @@ class Product(Timestamp):
 
     name = models.CharField(max_length=100, null=True, blank=True)
     # NOTE: code is unique per company (not globally) to support multi-tenant catalogs.
-    code = models.CharField(max_length=20, null=True, blank=True, db_index=True)
+    code = models.CharField(max_length=20, null=True,
+                            blank=True, db_index=True)
     model = models.CharField(max_length=100, null=True, blank=True)
     sku = models.CharField(max_length=100, null=True, blank=True)
-    category = models.CharField(max_length=100, default="", null=True, blank=True)
+    category = models.CharField(
+        max_length=100, default="", null=True, blank=True)
 
     # MegaShop catalog helpers (optional; keeps existing APIs stable)
     category_ref = models.ForeignKey(
@@ -220,16 +224,8 @@ class Product(Timestamp):
     # Flexible extra fields (max variables without new migrations)
     extra = models.JSONField(default=dict, blank=True)
 
-    # Flexible unit-conversion system (replaces hard-coded dual-unit assumptions).
-    unit_conversion_group = models.ForeignKey(
-        "products.UnitConversionGroup",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        db_index=True,
-        related_name="products",
-        help_text="Conversion rule set used for this product (stock is stored in the group's base unit).",
-    )
+    # Flexible unit-conversion system.
+    # Product.unit is the canonical base unit used for internal stock math.
     display_unit = models.ForeignKey(
         Unit,
         on_delete=models.SET_NULL,
@@ -237,7 +233,7 @@ class Product(Timestamp):
         blank=True,
         db_index=True,
         related_name="display_products",
-        help_text="Preferred unit for UI/API display. StockSummary quantity remains stored in base unit.",
+        help_text="Preferred unit for UI/API display. StockSummary quantity remains stored in the base unit.",
     )
 
     # Stock threshold customization (default keeps current behavior)
@@ -246,59 +242,13 @@ class Product(Timestamp):
     # Enable per-batch tracking for pharmacy/perishable items (see ProductBatch)
     track_batches = models.BooleanField(default=False)
 
-    # ── Dual-unit / pack-size fields ──────────────────────────────────────────
-    # Primary unit  (e.g. Box, Strip, Bottle) is the existing `unit` FK.
-    # Optional secondary unit (e.g. Piece, Tablet, ml) can be linked here.
-    # The conversion ratio is per-product so 1 Paracetamol Box = 10 Strips
-    # while 1 Amoxicillin Box = 6 Strips.
-    secondary_unit = models.ForeignKey(
+    # ── The base storage unit for this product ────────────────────────────────
+    unit = models.ForeignKey(
         Unit,
-        on_delete=models.SET_NULL,
-        null=True,
+        on_delete=models.CASCADE,
         blank=True,
-        related_name="secondary_products",
-        help_text=(
-            "The smaller / secondary unit (e.g. Piece, Tablet, ml). "
-            "When set, stock is also shown in this unit."
-        ),
-    )
-    unit_conversion_factor = models.PositiveIntegerField(
-        default=1,
-        help_text=(
-            "How many secondary units equal 1 primary unit. "
-            "E.g. 1 Box = 10 Pieces → enter 10. "
-            "Ignored when secondary_unit is not set."
-        ),
-    )
-    # Auto-computed field; never set this directly – it is recalculated in save().
-    in_stock_secondary = models.DecimalField(
-        max_digits=10,
-        decimal_places=1,
-        default=0,
-        help_text="Read-only. Auto-computed as in_stock × unit_conversion_factor (supports decimals).",
-    )
-
-    # ── Selling Unit (Customer purchase unit) ──────────────────────────────────
-    # The unit in which customers buy the product (e.g., Pieces, Tablets, ml)
-    # This is the unit for POS transactions. Price displayed in POS is per selling_unit.
-    selling_unit = models.ForeignKey(
-        Unit,
-        on_delete=models.SET_NULL,
         null=True,
-        blank=True,
-        db_index=True,
-        related_name="selling_products",
-        help_text="The unit in which customers buy this product (e.g., Piece, Tablet). Price is per selling_unit.",
-    )
-    selling_unit_conversion_factor = models.DecimalField(
-        max_digits=10,
-        decimal_places=2,
-        default=1,
-        help_text=(
-            "How many selling units equal 1 base unit. "
-            "E.g. if base=Box and selling=Piece, and 1 Box=10 Pieces, enter 10. "
-            "Used to convert customer quantity to base unit for stock deduction."
-        ),
+        help_text="Canonical base unit for this product. All stock is stored in this unit.",
     )
 
     gender = models.CharField(
@@ -323,8 +273,6 @@ class Product(Timestamp):
     description = RichTextField(blank=True, null=True)
     # content = RichTextField(blank=False, null=False)
     available = models.IntegerField(default=0)
-
-    unit = models.ForeignKey(Unit, on_delete=models.CASCADE, blank=True, null=True)
     # color = models.CharField(max_length=300, default="", blank=True, null=True)
     price = models.FloatField(default=0, blank=True, null=True)
     priceSale = models.FloatField(default=0, blank=True, null=True)
@@ -350,8 +298,10 @@ class Product(Timestamp):
 
     image = models.ImageField(upload_to=upload_to, blank=True, null=True)
     coverUrl = models.ImageField(upload_to=upload_to, blank=True, null=True)
-    barcode = models.ImageField(upload_to=upload_to_barcode, blank=True, null=True)
-    qrcode = models.ImageField(upload_to=upload_to_qrcode, blank=True, null=True)
+    barcode = models.ImageField(
+        upload_to=upload_to_barcode, blank=True, null=True)
+    qrcode = models.ImageField(
+        upload_to=upload_to_qrcode, blank=True, null=True)
 
     quantity = models.IntegerField(default=0)
     out_of_stock = models.BooleanField(default=False)
@@ -552,17 +502,49 @@ class Product(Timestamp):
         # caused `price` to become 0 when only `price` was provided and `priceSale` stayed at default 0.
 
         self.priceSale = self.price
-
-        # Dual-unit: keep secondary stock in sync whenever in_stock changes.
-        secondary_id = getattr(self, "secondary_unit_id", None)
-        if secondary_id and self.unit_conversion_factor:
-            self.in_stock_secondary = (self.in_stock or 0) * int(
-                self.unit_conversion_factor
-            )
-        else:
-            self.in_stock_secondary = 0
-
         super(Product, self).save(*args, **kwargs)
+
+    def get_default_selling_unit(self):
+        return (
+            self.units.filter(is_selling_unit=True, is_default_selling=True)
+            .select_related("unit")
+            .first()
+        )
+
+    def get_default_buying_unit(self):
+        return (
+            self.units.filter(is_buying_unit=True)
+            .select_related("unit")
+            .order_by("-is_default", "id")
+            .first()
+        )
+
+    def convert_quantity_to_base(self, quantity, product_unit=None):
+        """Convert a quantity expressed in a product unit to the product base unit."""
+        if quantity is None:
+            return Decimal("0")
+
+        if product_unit is None:
+            product_unit = self.get_default_selling_unit()
+
+        try:
+            quantity_dec = Decimal(str(quantity))
+        except Exception:
+            return Decimal("0")
+
+        if product_unit is None:
+            return quantity_dec
+
+        conversion = getattr(product_unit, "conversion_to_base", None)
+        if conversion is None:
+            return quantity_dec
+
+        try:
+            conversion_dec = Decimal(str(conversion))
+        except Exception:
+            return quantity_dec
+
+        return quantity_dec * conversion_dec
 
     def save_model(self, request, obj, form, change):
         # Only set user during the first save.
@@ -576,9 +558,12 @@ class Product(Timestamp):
 
     class Meta:
         indexes = [
-            models.Index(fields=["companyId", "code"], name="idx_product_company_code"),
-            models.Index(fields=["companyId", "name"], name="idx_product_company_name"),
-            models.Index(fields=["companyId", "sku"], name="idx_product_company_sku"),
+            models.Index(fields=["companyId", "code"],
+                         name="idx_product_company_code"),
+            models.Index(fields=["companyId", "name"],
+                         name="idx_product_company_name"),
+            models.Index(fields=["companyId", "sku"],
+                         name="idx_product_company_sku"),
         ]
         constraints = [
             models.UniqueConstraint(
@@ -593,7 +578,8 @@ class Image(models.Model):
     product = models.ForeignKey(
         Product, related_name="images", on_delete=models.CASCADE, null=True
     )
-    picture = models.ImageField(upload_to=upload_to_multi, null=True, blank=True)
+    picture = models.ImageField(
+        upload_to=upload_to_multi, null=True, blank=True)
 
 
 class Tag(models.Model):
@@ -729,6 +715,62 @@ class ProductVariant(models.Model):
         return " - ".join(parts)
 
 
+class ProductUnit(models.Model):
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name="units",
+    )
+    unit = models.ForeignKey(
+        Unit,
+        on_delete=models.PROTECT,
+        related_name="product_units",
+    )
+    conversion_to_base = models.DecimalField(
+        max_digits=18,
+        decimal_places=6,
+        default=1,
+        help_text=(
+            "How many base units equal one of this unit. "
+            "Example: if base unit=Box and this unit=Piece, enter 0.1."
+        ),
+    )
+    price = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        default=0,
+        help_text="Unit price for this product unit.",
+    )
+    is_default = models.BooleanField(
+        default=False,
+        help_text="True when this is the default unit for this product.",
+    )
+    is_buying_unit = models.BooleanField(
+        default=False,
+        help_text="True when this unit is used for purchasing stock.",
+    )
+    is_selling_unit = models.BooleanField(
+        default=False,
+        help_text="True when this unit can be sold in POS/orders.",
+    )
+    is_default_selling = models.BooleanField(
+        default=False,
+        help_text="True when this is the default selling unit for this product.",
+    )
+
+    class Meta:
+        unique_together = [("product", "unit")]
+        indexes = [
+            models.Index(fields=["product", "is_default_selling"],
+                         name="idx_pu_prod_default_sell"),
+            models.Index(fields=["product", "is_buying_unit"],
+                         name="idx_pu_prod_buying"),
+        ]
+
+    def __str__(self):
+        return f"{self.product.name or self.product.id} — {self.unit.name}"
+
+
 class ProductSerialItem(models.Model):
     """
     One row = one physical unit in the warehouse.
@@ -838,7 +880,8 @@ class ProductSerialItem(models.Model):
             models.Index(
                 fields=["variant", "status"], name="idx_serial_variant_status"
             ),
-            models.Index(fields=["warehouse", "status"], name="idx_serial_wh_status"),
+            models.Index(fields=["warehouse", "status"],
+                         name="idx_serial_wh_status"),
         ]
 
     def save(self, *args, **kwargs):

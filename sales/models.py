@@ -72,7 +72,8 @@ class Sale(Timestamp):
     )
 
     # Order identification
-    order_number = models.CharField(max_length=100, unique=True, null=True, blank=True)
+    order_number = models.CharField(
+        max_length=100, unique=True, null=True, blank=True)
     invoiceNumber = models.CharField(
         max_length=100, null=True, blank=True
     )  # Keep for backward compatibility
@@ -162,8 +163,10 @@ class Sale(Timestamp):
     )
     # Financial fields (using legacy field names to avoid migration conflicts)
     taxes = models.FloatField(default=10.0, help_text="Tax rate percentage")
-    taxes_value = models.FloatField(default=0, help_text="Calculated tax amount")
-    discount = models.FloatField(default=0, help_text="Discount rate percentage")
+    taxes_value = models.FloatField(
+        default=0, help_text="Calculated tax amount")
+    discount = models.FloatField(
+        default=0, help_text="Discount rate percentage")
     discount_amount = models.FloatField(default=0, help_text="Discount amount")
 
     # Tips / service charge
@@ -177,7 +180,8 @@ class Sale(Timestamp):
     )
     tip_amount = models.FloatField(default=0, help_text="Tip amount")
 
-    totalQty = models.IntegerField(default=0, help_text="Total quantity of items")
+    totalQty = models.IntegerField(
+        default=0, help_text="Total quantity of items")
     subTotal = models.FloatField(
         default=0, help_text="Subtotal before tax and discount"
     )
@@ -189,7 +193,8 @@ class Sale(Timestamp):
     total = models.FloatField(default=0, help_text="Legacy total field")
 
     # Currency and additional fields
-    currency = models.CharField(max_length=10, default="BDT", help_text="Currency code")
+    currency = models.CharField(
+        max_length=10, default="BDT", help_text="Currency code")
     notes = models.TextField(
         blank=True, null=True, help_text="Special instructions or notes"
     )
@@ -291,7 +296,8 @@ class Sale(Timestamp):
             base_amount = 0
 
         self.subTotal = subtotal_sum
-        self.taxes_value = round((base_amount * float(self.taxes or 0)) / 100, 2)
+        self.taxes_value = round(
+            (base_amount * float(self.taxes or 0)) / 100, 2)
         self.service_charge_amount = round(
             (base_amount * float(self.service_charge_rate or 0)) / 100, 2
         )
@@ -351,7 +357,8 @@ class Sale(Timestamp):
         # Calculate due amount (allow advance=0)
         if self.totalAmount is not None and self.advance is not None:
             try:
-                self.due = max(float(self.totalAmount) - float(self.advance), 0.0)
+                self.due = max(float(self.totalAmount) -
+                               float(self.advance), 0.0)
             except Exception:
                 # Keep existing due on parse errors
                 pass
@@ -364,7 +371,8 @@ class Sale(Timestamp):
             if base_amount < 0:
                 base_amount = 0
 
-            self.taxes_value = round((base_amount / 100) * float(self.taxes or 0), 2)
+            self.taxes_value = round(
+                (base_amount / 100) * float(self.taxes or 0), 2)
             self.service_charge_amount = round(
                 (base_amount / 100) * float(self.service_charge_rate or 0), 2
             )
@@ -456,7 +464,8 @@ class InvoiceItem(models.Model):
 
     # Item details
     title = models.CharField(max_length=200, help_text="Item name")
-    description = models.CharField(max_length=500, default="", blank=True, null=True)
+    description = models.CharField(
+        max_length=500, default="", blank=True, null=True)
     category = models.CharField(
         max_length=100, default="", blank=True, null=True, help_text="Menu category"
     )
@@ -468,6 +477,12 @@ class InvoiceItem(models.Model):
         default=1.0,
         help_text="Quantity (supports decimals for fractional units)",
     )
+    base_quantity = models.DecimalField(
+        max_digits=10,
+        decimal_places=1,
+        default=1.0,
+        help_text="Quantity converted to product base unit for stock deduction.",
+    )
     price = models.DecimalField(
         max_digits=10, decimal_places=2, default=0.00, help_text="Price per unit"
     )
@@ -477,7 +492,8 @@ class InvoiceItem(models.Model):
         default=0.00,
         help_text="Total price for this item",
     )
-    service = models.CharField(max_length=500, default="", blank=True, null=True)
+    service = models.CharField(
+        max_length=500, default="", blank=True, null=True)
     code = models.IntegerField(default=0, blank=True, null=True)
     duration = models.IntegerField(default=0, blank=True, null=True)
 
@@ -496,6 +512,14 @@ class InvoiceItem(models.Model):
             "True when the sold quantity is in secondary units (e.g. Strips), "
             "False when in primary units (e.g. Box)."
         ),
+    )
+    sold_unit = models.ForeignKey(
+        "products.Unit",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="invoice_items",
+        help_text="The unit selected at sale time (e.g. Box, Strip).",
     )
 
     # ── Product variant tracking (clothing, multi-size products) ──────────────
@@ -547,6 +571,8 @@ class InvoiceItem(models.Model):
 
     def save(self, *args, **kwargs):
         """Calculate totals"""
+        if self.base_quantity in (None, ""):
+            self.base_quantity = self.quantity
         # Calculate total price
         if self.price and self.quantity:
             self.total = self.price * self.quantity
@@ -576,7 +602,8 @@ class Refund(Timestamp):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
-    sale = models.ForeignKey(Sale, related_name="refunds", on_delete=models.CASCADE)
+    sale = models.ForeignKey(
+        Sale, related_name="refunds", on_delete=models.CASCADE)
     created_by = models.ForeignKey(
         User,
         related_name="created_refunds",
@@ -588,7 +615,8 @@ class Refund(Timestamp):
         max_length=20, choices=PAYMENT_CHOICE, blank=True, null=True
     )
     reason = models.TextField(blank=True, null=True)
-    total_amount = models.FloatField(default=0, help_text="Total refund amount")
+    total_amount = models.FloatField(
+        default=0, help_text="Total refund amount")
 
     # Inventory integration (MegaShop): when True, refunded quantities were added
     # back to products.Product.in_stock at refund creation time.
@@ -606,14 +634,16 @@ class RefundItem(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
-    refund = models.ForeignKey(Refund, related_name="items", on_delete=models.CASCADE)
+    refund = models.ForeignKey(
+        Refund, related_name="items", on_delete=models.CASCADE)
     invoice_item = models.ForeignKey(
         InvoiceItem,
         related_name="refund_items",
         on_delete=models.PROTECT,
     )
     quantity = models.PositiveIntegerField(default=1)
-    unit_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    unit_price = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0)
     total = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
     def save(self, *args, **kwargs):
@@ -630,7 +660,8 @@ class SalePayment(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
-    sale = models.ForeignKey(Sale, related_name="payments", on_delete=models.CASCADE)
+    sale = models.ForeignKey(
+        Sale, related_name="payments", on_delete=models.CASCADE)
     amount = models.FloatField(help_text="Amount paid in this transaction")
     payment_method = models.CharField(
         max_length=20, choices=PAYMENT_CHOICE, default="cash"

@@ -14,6 +14,7 @@ from .models.product_model import (
     Color,
     ProductVariant,
     ProductSerialItem,
+    ProductUnit,
     UnitConversionGroup,
     UnitConversionStep,
 )
@@ -190,23 +191,16 @@ class ProductSerializer(serializers.ModelSerializer):
     reviews = ReviewSerializer(many=True, required=False)
     tags = serializers.StringRelatedField(many=True, required=False)
     colors = serializers.StringRelatedField(many=True, required=False)
-    variants = ProductVariantSerializer(many=True, required=False, read_only=True)
+    variants = ProductVariantSerializer(
+        many=True, required=False, read_only=True)
 
-    # Dual-unit read-only helpers
-    unit_name = serializers.CharField(source="unit.name", read_only=True, default=None)
-    secondary_unit_name = serializers.CharField(
-        source="secondary_unit.name", read_only=True, default=None
-    )
-    unit_conversion_group_name = serializers.CharField(
-        source="unit_conversion_group.name", read_only=True, default=None
-    )
+    # Unit helpers
+    unit_name = serializers.CharField(
+        source="unit.name", read_only=True, default=None)
     display_unit_name = serializers.CharField(
         source="display_unit.name", read_only=True, default=None
     )
-    # Selling unit read-only helpers
-    selling_unit_name = serializers.CharField(
-        source="selling_unit.name", read_only=True, default=None
-    )
+    product_units = serializers.SerializerMethodField()
     # Warehouse tracking read-only helpers
     warehouse_name = serializers.CharField(
         source="warehouse.name", read_only=True, default=None
@@ -218,14 +212,19 @@ class ProductSerializer(serializers.ModelSerializer):
         # Declare extra fields so they appear in the serialized output
         read_only_fields = (
             "unit_name",
-            "secondary_unit_name",
-            "unit_conversion_group_name",
             "display_unit_name",
-            "selling_unit_name",
-            "in_stock_secondary",
+            "product_units",
             "unique_code",
             "warehouse_name",
         )
+
+    def get_product_units(self, instance):
+        product_units = getattr(instance, "units", None)
+        if product_units is None:
+            return []
+        return ProductUnitSerializer(
+            product_units.all(), many=True, context=self.context
+        ).data
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -308,50 +307,30 @@ class ProductPostSerializer(serializers.ModelSerializer):
     colors = ColorSerializer(many=True, required=False)
 
     # Variants support for clothing products
-    variants = ProductVariantSerializer(many=True, required=False, read_only=False)
+    variants = ProductVariantSerializer(
+        many=True, required=False, read_only=False)
 
-    # Dual-unit read-only helpers
-    unit_name = serializers.CharField(source="unit.name", read_only=True, default=None)
-    secondary_unit_name = serializers.CharField(
-        source="secondary_unit.name", read_only=True, default=None
-    )
-    unit_conversion_group_name = serializers.CharField(
-        source="unit_conversion_group.name", read_only=True, default=None
-    )
+    # Unit helpers
+    unit_name = serializers.CharField(
+        source="unit.name", read_only=True, default=None)
     display_unit_name = serializers.CharField(
         source="display_unit.name", read_only=True, default=None
     )
-    # Selling unit read-only helpers
-    selling_unit_name = serializers.CharField(
-        source="selling_unit.name", read_only=True, default=None
-    )
 
     # Unit conversion fields - explicitly defined to ensure proper handling in updates
-    unit_conversion_group = serializers.PrimaryKeyRelatedField(
-        queryset=UnitConversionGroup.objects.all(),
-        required=False,
-        allow_null=True,
-        help_text="Conversion rule set used for this product",
-    )
     display_unit = serializers.PrimaryKeyRelatedField(
         queryset=Unit.objects.all(),
         required=False,
         allow_null=True,
         help_text="Preferred unit for UI/API display",
     )
-    selling_unit = serializers.PrimaryKeyRelatedField(
-        queryset=Unit.objects.all(),
+    product_units = serializers.ListField(
+        child=serializers.DictField(),
         required=False,
-        allow_null=True,
-        help_text="The unit in which customers buy this product",
+        write_only=True,
+        help_text="Optional product unit rows (buying/selling/base).",
     )
-    selling_unit_conversion_factor = serializers.DecimalField(
-        max_digits=10,
-        decimal_places=2,
-        required=False,
-        default=1,
-        help_text="How many selling units equal 1 base unit",
-    )
+    product_units_data = serializers.SerializerMethodField(read_only=True)
     # Warehouse tracking read-only helpers
     warehouse_name = serializers.CharField(
         source="warehouse.name", read_only=True, default=None
@@ -362,14 +341,85 @@ class ProductPostSerializer(serializers.ModelSerializer):
         fields = "__all__"
         read_only_fields = (
             "unit_name",
-            "secondary_unit_name",
-            "unit_conversion_group_name",
             "display_unit_name",
-            "selling_unit_name",
-            "in_stock_secondary",
             "unique_code",
             "warehouse_name",
+            "product_units_data",
         )
+
+    def get_product_units_data(self, obj):
+        rows = []
+        for pu in obj.units.select_related("unit").all().order_by("id"):
+            rows.append(
+                {
+                    "id": pu.id,
+                    "unit": pu.unit_id,
+                    "unit_name": getattr(pu.unit, "name", None),
+                    "conversion_to_base": pu.conversion_to_base,
+                    "price": pu.price,
+                    "is_default": pu.is_default,
+                    "is_buying_unit": pu.is_buying_unit,
+                    "is_selling_unit": pu.is_selling_unit,
+                    "is_default_selling": pu.is_default_selling,
+                }
+            )
+        return rows
+
+    def _upsert_product_units(self, product, rows):
+        if rows is None:
+            return
+
+        def _extract_unit_id(value):
+            if value is None:
+                return None
+            if isinstance(value, (int, str)):
+                return value
+            if isinstance(value, dict):
+                return value.get("id")
+            return None
+
+        normalized = []
+        for row in rows:
+            unit_id = _extract_unit_id(row.get("unit")) or _extract_unit_id(
+                row.get("unit_id")
+            )
+            if not unit_id:
+                continue
+            normalized.append(
+                {
+                    "unit_id": unit_id,
+                    "conversion_to_base": row.get("conversion_to_base", 1),
+                    "price": row.get("price", 0),
+                    "is_default": bool(row.get("is_default", False)),
+                    "is_buying_unit": bool(row.get("is_buying_unit", False)),
+                    "is_selling_unit": bool(row.get("is_selling_unit", False)),
+                    "is_default_selling": bool(row.get("is_default_selling", False)),
+                }
+            )
+
+        if not normalized:
+            return
+
+        # Guarantee stable flags so update payloads are applied consistently.
+        if not any(r["is_default"] for r in normalized):
+            normalized[0]["is_default"] = True
+            normalized[0]["conversion_to_base"] = 1
+        if not any(r["is_buying_unit"] for r in normalized):
+            default_row = next(
+                (r for r in normalized if r["is_default"]), normalized[0])
+            default_row["is_buying_unit"] = True
+        if not any(r["is_selling_unit"] for r in normalized):
+            default_row = next(
+                (r for r in normalized if r["is_default"]), normalized[0])
+            default_row["is_selling_unit"] = True
+        if not any(r["is_default_selling"] for r in normalized):
+            selling_row = next(
+                (r for r in normalized if r["is_selling_unit"]), normalized[0])
+            selling_row["is_default_selling"] = True
+
+        product.units.all().delete()
+        for row in normalized:
+            ProductUnit.objects.create(product=product, **row)
 
     def create(self, validated_data):
         from django.db import transaction
@@ -382,6 +432,7 @@ class ProductPostSerializer(serializers.ModelSerializer):
             "saleLabel", {"enabled": False, "content": "Sale"}
         )
         variants_data = validated_data.pop("variants", [])
+        product_units_data = validated_data.pop("product_units", None)
 
         # Pop stock fields from product payload — stock is managed exclusively
         # via StockSummary. Product.in_stock will be auto-recalculated by signal.
@@ -399,6 +450,8 @@ class ProductPostSerializer(serializers.ModelSerializer):
             product = Product.objects.create(
                 newLabel=newLabel, saleLabel=saleLabel, in_stock=0, **validated_data
             )
+
+            self._upsert_product_units(product, product_units_data)
 
             company = product.companyId
             warehouse = product.warehouse
@@ -452,6 +505,7 @@ class ProductPostSerializer(serializers.ModelSerializer):
         newlabel_data = validated_data.pop("newLabel", None)
         salelabel_data = validated_data.pop("saleLabel", None)
         variants_data = validated_data.pop("variants", None)
+        product_units_data = validated_data.pop("product_units", None)
 
         # Pop stock fields — stock is managed exclusively via StockSummary.
         # Product.in_stock is auto-recalculated by signal after StockSummary changes.
@@ -461,10 +515,7 @@ class ProductPostSerializer(serializers.ModelSerializer):
         # Explicitly assign model fields before saving so FK / decimal updates
         # are not lost through deferred instances or serializer edge cases.
         explicit_fields = (
-            "unit_conversion_group",
             "display_unit",
-            "selling_unit",
-            "selling_unit_conversion_factor",
         )
 
         with transaction.atomic():
@@ -475,24 +526,29 @@ class ProductPostSerializer(serializers.ModelSerializer):
             )
             for field_name in explicit_fields:
                 if field_name in validated_data:
-                    setattr(instance, field_name, validated_data.pop(field_name))
+                    setattr(instance, field_name,
+                            validated_data.pop(field_name))
 
             # Existing rows may have NULL labels; avoid crashing on PATCH.
             if newlabel_data is not None:
                 if instance.newLabel is None:
-                    instance.newLabel = NewLabel.objects.create(**newlabel_data)
+                    instance.newLabel = NewLabel.objects.create(
+                        **newlabel_data)
                     instance.save(update_fields=["newLabel"])
                 else:
                     newlabel_serializer = self.fields["newLabel"]
-                    newlabel_serializer.update(instance.newLabel, newlabel_data)
+                    newlabel_serializer.update(
+                        instance.newLabel, newlabel_data)
 
             if salelabel_data is not None:
                 if instance.saleLabel is None:
-                    instance.saleLabel = SaleLabel.objects.create(**salelabel_data)
+                    instance.saleLabel = SaleLabel.objects.create(
+                        **salelabel_data)
                     instance.save(update_fields=["saleLabel"])
                 else:
                     salelabel_serializer = self.fields["saleLabel"]
-                    salelabel_serializer.update(instance.saleLabel, salelabel_data)
+                    salelabel_serializer.update(
+                        instance.saleLabel, salelabel_data)
 
             # Handle variants update (replace all variants + their ProductBranchInventory rows)
             if variants_data is not None and len(variants_data) > 0:
@@ -549,12 +605,12 @@ class ProductPostSerializer(serializers.ModelSerializer):
 
             instance.save()
 
+            self._upsert_product_units(instance, product_units_data)
+
             logger.debug(
-                "ProductPostSerializer.update saved id=%s display_unit=%s unit_conversion_group=%s selling_unit=%s in_stock=%s",
+                "ProductPostSerializer.update saved id=%s display_unit=%s in_stock=%s",
                 instance.pk,
                 getattr(instance, "display_unit_id", None),
-                getattr(instance, "unit_conversion_group_id", None),
-                getattr(instance, "selling_unit_id", None),
                 getattr(instance, "in_stock", None),
             )
 
@@ -665,8 +721,27 @@ class UnitSerializer(serializers.ModelSerializer):
         fields = ["id", "name", "status"]
 
 
+class ProductUnitSerializer(serializers.ModelSerializer):
+    unit_name = serializers.CharField(source="unit.name", read_only=True)
+
+    class Meta:
+        model = ProductUnit
+        fields = [
+            "id",
+            "unit",
+            "unit_name",
+            "conversion_to_base",
+            "price",
+            "is_default",
+            "is_buying_unit",
+            "is_selling_unit",
+            "is_default_selling",
+        ]
+
+
 class UnitConversionStepSerializer(serializers.ModelSerializer):
-    from_unit_name = serializers.CharField(source="from_unit.name", read_only=True)
+    from_unit_name = serializers.CharField(
+        source="from_unit.name", read_only=True)
     to_unit_name = serializers.CharField(source="to_unit.name", read_only=True)
 
     class Meta:
@@ -684,7 +759,8 @@ class UnitConversionStepSerializer(serializers.ModelSerializer):
 
 
 class UnitConversionGroupSerializer(serializers.ModelSerializer):
-    base_unit_name = serializers.CharField(source="base_unit.name", read_only=True)
+    base_unit_name = serializers.CharField(
+        source="base_unit.name", read_only=True)
     steps = UnitConversionStepSerializer(many=True, read_only=True)
 
     class Meta:
@@ -712,10 +788,13 @@ class InventoryCategorySerializer(serializers.ModelSerializer):
 
 
 class InventoryItemSerializer(serializers.ModelSerializer):
-    category_name = serializers.CharField(source="category.name", read_only=True)
+    category_name = serializers.CharField(
+        source="category.name", read_only=True)
     unit_name = serializers.CharField(source="unit.name", read_only=True)
-    supplier_name = serializers.CharField(source="supplier.name", read_only=True)
-    status_display = serializers.CharField(source="get_status_display", read_only=True)
+    supplier_name = serializers.CharField(
+        source="supplier.name", read_only=True)
+    status_display = serializers.CharField(
+        source="get_status_display", read_only=True)
     formatted_last_updated = serializers.CharField(read_only=True)
     stock_percentage = serializers.FloatField(read_only=True)
     is_low_stock = serializers.BooleanField(read_only=True)
@@ -807,7 +886,8 @@ class StockMovementSerializer(serializers.ModelSerializer):
 class AddStockSerializer(serializers.Serializer):
     """Serializer for adding stock to inventory items"""
 
-    quantity = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=0.01)
+    quantity = serializers.DecimalField(
+        max_digits=10, decimal_places=2, min_value=0.01)
     reason = serializers.CharField(
         max_length=200, required=False, default="Stock addition"
     )
@@ -816,7 +896,8 @@ class AddStockSerializer(serializers.Serializer):
         max_length=100, required=False, allow_blank=True
     )
     expiry_date = serializers.DateField(required=False, allow_null=True)
-    warranty_expiry_date = serializers.DateField(required=False, allow_null=True)
+    warranty_expiry_date = serializers.DateField(
+        required=False, allow_null=True)
 
 
 class InventoryStatsSerializer(serializers.Serializer):
@@ -998,24 +1079,19 @@ class StockSummaryPOSSerializer(serializers.ModelSerializer):
     variant_size_code = serializers.SerializerMethodField()
 
     # Unit Conversion Group
-    unit_conversion_group = serializers.IntegerField(
-        source="product.unit_conversion_group_id", read_only=True
-    )
     display_unit = serializers.IntegerField(
         source="product.display_unit_id", read_only=True
     )
     display_unit_name = serializers.CharField(
         source="product.display_unit.name", read_only=True
     )
-    selling_unit = serializers.IntegerField(
-        source="product.selling_unit_id", read_only=True
-    )
-    selling_unit_name = serializers.CharField(
-        source="product.selling_unit.name", read_only=True
-    )
-    selling_unit_conversion_factor = serializers.IntegerField(
-        source="product.selling_unit_conversion_factor", read_only=True
-    )
+
+    # Selling unit (from ProductUnit rows)
+    selling_unit_id = serializers.SerializerMethodField()
+    selling_unit_name = serializers.SerializerMethodField()
+    selling_unit_conversion_factor = serializers.SerializerMethodField()
+    selling_unit_price = serializers.SerializerMethodField()
+    display_unit_conversion_to_base = serializers.SerializerMethodField()
 
     class Meta:
         model = ProductBranchInventory
@@ -1036,12 +1112,13 @@ class StockSummaryPOSSerializer(serializers.ModelSerializer):
             "variant_size_name",
             "variant_color",
             "variant_size_code",
-            "unit_conversion_group",
             "display_unit",
             "display_unit_name",
-            "selling_unit",
+            "selling_unit_id",
             "selling_unit_name",
             "selling_unit_conversion_factor",
+            "selling_unit_price",
+            "display_unit_conversion_to_base",
         ]
 
     def get_id(self, obj):
@@ -1127,6 +1204,46 @@ class StockSummaryPOSSerializer(serializers.ModelSerializer):
     def get_variant_size_code(self, obj):
         return getattr(obj.variant, "size_code", None) if obj.variant_id else None
 
+    def _get_default_selling_unit_row(self, obj):
+        """Return the default selling ProductUnit row for the product (prefetch-friendly)."""
+        rows = obj.product.units.all()
+        return (
+            next((r for r in rows if r.is_default_selling), None)
+            or next((r for r in rows if r.is_selling_unit), None)
+        )
+
+    def _get_display_unit_row(self, obj):
+        """Return the ProductUnit row whose unit matches the product display_unit."""
+        display_unit_id = obj.product.display_unit_id
+        if not display_unit_id:
+            return None
+        rows = obj.product.units.all()
+        return next((r for r in rows if r.unit_id == display_unit_id), None)
+
+    def get_selling_unit_id(self, obj):
+        row = self._get_default_selling_unit_row(obj)
+        return row.unit_id if row else None
+
+    def get_selling_unit_name(self, obj):
+        row = self._get_default_selling_unit_row(obj)
+        if row:
+            return getattr(row.unit, "name", None) if row.unit_id else None
+        return None
+
+    def get_selling_unit_conversion_factor(self, obj):
+        row = self._get_default_selling_unit_row(obj)
+        return float(row.conversion_to_base) if row else None
+
+    def get_selling_unit_price(self, obj):
+        row = self._get_default_selling_unit_row(obj)
+        if row and row.price and float(row.price) > 0:
+            return float(row.price)
+        return None
+
+    def get_display_unit_conversion_to_base(self, obj):
+        row = self._get_display_unit_row(obj)
+        return float(row.conversion_to_base) if row else None
+
 
 class StockSummaryInventorySerializer(serializers.Serializer):
     """Inventory Management serializer backed by aggregated StockSummary data."""
@@ -1150,14 +1267,17 @@ class StockSummaryInventorySerializer(serializers.Serializer):
     status = serializers.CharField(read_only=True)
     status_display = serializers.CharField(read_only=True)
     last_updated = serializers.CharField(read_only=True, allow_null=True)
-    formatted_last_updated = serializers.CharField(read_only=True, allow_null=True)
+    formatted_last_updated = serializers.CharField(
+        read_only=True, allow_null=True)
     stock_percentage = serializers.FloatField(read_only=True)
     is_low_stock = serializers.BooleanField(read_only=True)
     description = serializers.CharField(read_only=True, allow_blank=True)
     location = serializers.CharField(read_only=True, allow_null=True)
     expiry_date = serializers.DateField(read_only=True, allow_null=True)
-    warranty_expiry_date = serializers.DateField(read_only=True, allow_null=True)
-    notes = serializers.CharField(read_only=True, allow_blank=True, allow_null=True)
+    warranty_expiry_date = serializers.DateField(
+        read_only=True, allow_null=True)
+    notes = serializers.CharField(
+        read_only=True, allow_blank=True, allow_null=True)
     average_usage = serializers.FloatField(read_only=True, allow_null=True)
     inventoryType = serializers.CharField(read_only=True, allow_null=True)
     low_stock_threshold = serializers.FloatField(read_only=True)
@@ -1166,26 +1286,20 @@ class StockSummaryInventorySerializer(serializers.Serializer):
     manufacturer = serializers.CharField(
         read_only=True, allow_null=True, allow_blank=True
     )
-    size = serializers.CharField(read_only=True, allow_null=True, allow_blank=True)
-    condition = serializers.CharField(read_only=True, allow_null=True, allow_blank=True)
+    size = serializers.CharField(
+        read_only=True, allow_null=True, allow_blank=True)
+    condition = serializers.CharField(
+        read_only=True, allow_null=True, allow_blank=True)
     refundable = serializers.BooleanField(read_only=True)
-    secondary_unit = serializers.CharField(read_only=True, allow_null=True)
-    secondary_unit_name = serializers.CharField(read_only=True, allow_null=True)
-    unit_conversion_factor = serializers.FloatField(read_only=True)
-    in_stock_secondary = serializers.FloatField(read_only=True)
-    unit_conversion_group = serializers.CharField(read_only=True, allow_null=True)
-    unit_conversion_group_name = serializers.CharField(read_only=True, allow_null=True)
     display_unit = serializers.CharField(read_only=True, allow_null=True)
     display_unit_name = serializers.CharField(read_only=True, allow_null=True)
-    selling_unit = serializers.CharField(read_only=True, allow_null=True)
-    selling_unit_name = serializers.CharField(read_only=True, allow_null=True)
-    selling_unit_conversion_factor = serializers.FloatField(read_only=True)
     price = serializers.FloatField(read_only=True)
     priceSale = serializers.FloatField(read_only=True)
     regular_price = serializers.FloatField(read_only=True)
     image = serializers.CharField(read_only=True, allow_null=True)
     quantity = serializers.FloatField(read_only=True)
-    variants = serializers.ListField(child=serializers.DictField(), read_only=True)
+    variants = serializers.ListField(
+        child=serializers.DictField(), read_only=True)
 
 
 class StockTransferCreateSerializer(serializers.ModelSerializer):
