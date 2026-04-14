@@ -395,6 +395,9 @@ class StockSummaryInventoryView(APIView):
             "product__generic_name",
             "product__brand",
             "variant",
+        ).prefetch_related(
+            "product__units",
+            "product__units__unit",
         )
 
         if branch_id:
@@ -490,6 +493,22 @@ class StockSummaryInventoryView(APIView):
                 100 if max_stock > 0 else 0
             is_low_stock = stock_status in {"low", "critical", "out_of_stock"}
 
+            # Build product_units list from prefetched rows
+            product_units = [
+                {
+                    "id": pu.id,
+                    "unit": pu.unit_id,
+                    "unit_name": getattr(pu.unit, "name", None),
+                    "conversion_to_base": float(pu.conversion_to_base or 1),
+                    "price": float(pu.price or 0),
+                    "is_default": pu.is_default,
+                    "is_buying_unit": pu.is_buying_unit,
+                    "is_selling_unit": pu.is_selling_unit,
+                    "is_default_selling": pu.is_default_selling,
+                }
+                for pu in product.units.all()
+            ]
+
             variants = []
             for row in group["rows"]:
                 if row.variant_id:
@@ -576,6 +595,7 @@ class StockSummaryInventoryView(APIView):
                         if product.display_unit
                         else None
                     ),
+                    "product_units": product_units,
                     "price": float(product.price or 0),
                     "priceSale": float(product.priceSale or 0),
                     "regular_price": float(product.regular_price or 0),
