@@ -331,6 +331,25 @@ class ProductPostSerializer(serializers.ModelSerializer):
         help_text="Optional product unit rows (buying/selling/base).",
     )
     product_units_data = serializers.SerializerMethodField(read_only=True)
+
+    # Simple buy/sell unit helpers (read names alongside FK ids)
+    buying_unit = serializers.PrimaryKeyRelatedField(
+        queryset=Unit.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    selling_unit = serializers.PrimaryKeyRelatedField(
+        queryset=Unit.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    buying_unit_name = serializers.CharField(
+        source="buying_unit.name", read_only=True, default=None
+    )
+    selling_unit_name = serializers.CharField(
+        source="selling_unit.name", read_only=True, default=None
+    )
+
     # Warehouse tracking read-only helpers
     warehouse_name = serializers.CharField(
         source="warehouse.name", read_only=True, default=None
@@ -342,6 +361,8 @@ class ProductPostSerializer(serializers.ModelSerializer):
         read_only_fields = (
             "unit_name",
             "display_unit_name",
+            "buying_unit_name",
+            "selling_unit_name",
             "unique_code",
             "warehouse_name",
             "product_units_data",
@@ -440,6 +461,19 @@ class ProductPostSerializer(serializers.ModelSerializer):
         validated_data.pop("available", None)
         # quantity (max_capacity) stays on the Product model; it is not stock.
 
+        # ── Convert initial_stock to smallest unit using buying/selling units ──
+        # selling_buying_scale = how many selling units = 1 buying unit
+        # If scale >= 1 → buying unit is larger → store in selling units = stock * scale
+        # If scale < 1  → buying unit is smaller → already at smallest, no conversion
+        scale = validated_data.get("selling_buying_scale", 1) or 1
+        try:
+            from decimal import Decimal as _Dec
+            scale_dec = _Dec(str(scale))
+            if scale_dec >= 1:
+                initial_stock = float(_Dec(str(initial_stock)) * scale_dec)
+        except Exception:
+            pass  # keep original stock on any conversion error
+
         # Use atomic transaction to ensure data consistency
         with transaction.atomic():
             # Create labels
@@ -516,6 +550,9 @@ class ProductPostSerializer(serializers.ModelSerializer):
         # are not lost through deferred instances or serializer edge cases.
         explicit_fields = (
             "display_unit",
+            "buying_unit",
+            "selling_unit",
+            "selling_buying_scale",
         )
 
         with transaction.atomic():

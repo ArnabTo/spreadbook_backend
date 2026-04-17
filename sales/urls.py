@@ -16,9 +16,9 @@ from .api import (
 router = routers.DefaultRouter()
 
 # Legacy endpoints
-router.register("api/product/sales/list", SaleViewSet, "sale-get")
+router.register("api/product/sales/list", SaleViewSet, "sale-list")
 router.register("api/product/sales/post", SalePostSet, "sale-post")
-router.register("api/product/sales/item", SaleItemSet, "sale-get")
+router.register("api/product/sales/item", SaleItemSet, "sale-item")
 
 # New POS endpoints
 router.register("api/pos/orders", POSOrderViewSet, "pos-orders")

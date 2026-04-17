@@ -16,10 +16,10 @@ from .api import (
 
 router = routers.DefaultRouter()
 # Legacy endpoints for backward compatibility
-router.register("api/gen/user/list", UserViewSet, "user-get")
+router.register("api/gen/user/list", UserViewSet, "user-list")
 router.register("api/gen/user/company", UserCompanyViewSet, "user-company")
-router.register("api/gen/user/create", CreateUserViewSet, "user-get")
-router.register("api/gen/user/update", UpdateUserViewSet, "user-get")
+router.register("api/gen/user/create", CreateUserViewSet, "user-create")
+router.register("api/gen/user/update", UpdateUserViewSet, "user-update")
 router.register("api/gen/user/re-set/pass", ResetPassUserViewSet, "user-reset")
 
 # New restaurant management endpoints

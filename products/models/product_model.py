@@ -242,6 +242,40 @@ class Product(Timestamp):
     # Enable per-batch tracking for pharmacy/perishable items (see ProductBatch)
     track_batches = models.BooleanField(default=False)
 
+    # ── Simple buy/sell unit pair ─────────────────────────────────────────────
+    # Independent of the advanced ProductUnit system.
+    # buying_unit : the unit used when purchasing stock (e.g. Box)
+    # selling_unit: the unit used when selling to customers (e.g. Piece)
+    # selling_buying_scale: how many selling units equal ONE buying unit
+    #   e.g. Box→Piece, scale=10 means 1 Box = 10 Pieces
+    #   Stock is always stored in the smaller unit (the side with more items).
+    buying_unit = models.ForeignKey(
+        Unit,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="buying_products",
+        help_text="Unit used when purchasing (e.g. Box). Stock entered in this unit is converted to smallest unit for storage.",
+    )
+    selling_unit = models.ForeignKey(
+        Unit,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="selling_products",
+        help_text="Unit used when selling to customers (e.g. Piece).",
+    )
+    selling_buying_scale = models.DecimalField(
+        max_digits=14,
+        decimal_places=4,
+        default=1,
+        help_text=(
+            "How many selling units equal ONE buying unit. "
+            "e.g. if buying=Box and selling=Piece and 1 box contains 10 pieces, enter 10. "
+            "Stock is stored in the smaller unit automatically."
+        ),
+    )
+
     # ── The base storage unit for this product ────────────────────────────────
     unit = models.ForeignKey(
         Unit,
