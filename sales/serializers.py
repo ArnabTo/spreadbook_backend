@@ -48,7 +48,13 @@ def _get_product_for_invoice_item(obj: InvoiceItem | None):
     if not obj:
         return None
     if getattr(obj, "product_id", None):
-        return obj.product
+        try:
+            return obj.product
+        except Product.DoesNotExist:
+            # Keep POS order listing resilient if referenced product was deleted.
+            return None
+        except Exception:
+            return None
     code = getattr(obj, "code", None)
     if not code:
         return None
