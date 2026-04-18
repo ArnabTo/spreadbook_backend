@@ -39,8 +39,8 @@ lsof -t -i tcp:3075 | xargs kill -9
 ## CI/CD
 GitHub Actions is expected to run basic checks and keep secrets in repository/environment secrets.# apibiz
 sudo systemctl daemon-reload
-sudo systemctl restart fcil
-sudo systemctl status fcil
+sudo systemctl restart suppershopApibiz
+sudo systemctl status suppershopApibiz
 
 
 sudo systemctl reload nginx
