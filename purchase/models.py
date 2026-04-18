@@ -15,8 +15,8 @@ class Purchase(Timestamp):
     """
 
     uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    product = models.ForeignKey(Product, on_delete=models.DO_NOTHING)
-    supplier = models.ForeignKey(Supplier, on_delete=models.DO_NOTHING)
+    product = models.ForeignKey(Product, on_delete=models.SET_NULL, null=True, blank=True)
+    supplier = models.ForeignKey(Supplier, on_delete=models.SET_NULL, null=True, blank=True)
     invoice_number = models.CharField(max_length=4, unique=True, null=True, blank=True)
     purchase_id = models.CharField(max_length=8, unique=True, null=True, blank=True)
     purchase_date = models.DateField(verbose_name="Purchase Date", default=now)

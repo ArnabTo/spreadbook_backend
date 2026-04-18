@@ -20,7 +20,7 @@ from .models.product_model import (
     Color,
     ProductVariant,
     UnitConversionGroup,
-    ProductUnit
+    ProductUnit,
 )
 from .models.rating_model import Rating
 from .models.review_model import Review
@@ -33,6 +33,30 @@ from .models.inventory_model import (
 )
 
 
+def resolve_company_for_import(raw_value):
+    """Resolve company by company_code, name, legacy companyId, or PK."""
+    if raw_value is None:
+        return None
+
+    if isinstance(raw_value, Company):
+        return raw_value
+
+    raw_text = str(raw_value).strip()
+    if not raw_text:
+        return None
+
+    if raw_text.isdigit():
+        company = Company.objects.filter(pk=int(raw_text)).first()
+        if company is not None:
+            return company
+
+    return (
+        Company.objects.filter(company_code__iexact=raw_text).first()
+        or Company.objects.filter(name__iexact=raw_text).first()
+        or Company.objects.filter(companyId__iexact=raw_text).first()
+    )
+
+
 class GenericNameByNameOrCreateWidget(ForeignKeyWidget):
     def __init__(self, model, field="pk", *args, **kwargs):
         super().__init__(model, field, *args, **kwargs)
@@ -43,27 +67,34 @@ class GenericNameByNameOrCreateWidget(ForeignKeyWidget):
         if not value:
             return None
 
-        if value in self.cache:
-            return self.cache[value]
+        company = resolve_company_for_import((row or {}).get("companyId"))
+        cache_key = (getattr(company, "pk", None), value.lower())
+
+        if cache_key in self.cache:
+            return self.cache[cache_key]
 
         existing = (
             GenericName.objects.filter(
-                name__iexact=value).order_by("createdAt").first()
+                companyId=company,
+                name__iexact=value,
+            )
+            .order_by("createdAt")
+            .first()
         )
         if existing:
-            self.cache[value] = existing
+            self.cache[cache_key] = existing
             return existing
 
-        new_obj = GenericName.objects.create(name=value)
-        self.cache[value] = new_obj
+        new_obj = GenericName.objects.create(name=value, companyId=company)
+        self.cache[cache_key] = new_obj
         return new_obj
 
 
-class CompanyByNameWidget(ForeignKeyWidget):
-    """Look up Company by name (case-insensitive)."""
+class CompanyByCodeOrNameWidget(ForeignKeyWidget):
+    """Look up Company by company_code, name, legacy companyId, or PK."""
 
     def __init__(self, *args, **kwargs):
-        super().__init__(Company, "name", *args, **kwargs)
+        super().__init__(Company, "company_code", *args, **kwargs)
         self._cache = {}
 
     def clean(self, value, row=None, *args, **kwargs):
@@ -72,11 +103,7 @@ class CompanyByNameWidget(ForeignKeyWidget):
             return None
         key = value.lower()
         if key not in self._cache:
-            obj = Company.objects.filter(name__iexact=value).first()
-            # Fallback: try numeric PK
-            if obj is None and value.isdigit():
-                obj = Company.objects.filter(pk=int(value)).first()
-            self._cache[key] = obj
+            self._cache[key] = resolve_company_for_import(value)
         return self._cache[key]
 
 
@@ -91,14 +118,28 @@ class BranchByNameOrCodeWidget(ForeignKeyWidget):
         value = str(value).strip() if value is not None else ""
         if not value:
             return None
-        key = value.lower()
+        company_hint = str((row or {}).get("companyId") or "").strip().lower()
+        key = (value.lower(), company_hint)
         if key not in self._cache:
-            obj = Branch.objects.filter(name__iexact=value).first()
+            qs = Branch.objects.all()
+
+            if company_hint:
+                company = (
+                    Company.objects.filter(company_code__iexact=company_hint).first()
+                    or Company.objects.filter(name__iexact=company_hint).first()
+                    or Company.objects.filter(companyId__iexact=company_hint).first()
+                )
+                if company is None and company_hint.isdigit():
+                    company = Company.objects.filter(pk=int(company_hint)).first()
+                if company is not None:
+                    qs = qs.filter(company=company)
+
+            obj = qs.filter(code__iexact=value).first()
             if obj is None:
-                obj = Branch.objects.filter(code__iexact=value).first()
+                obj = qs.filter(name__iexact=value).first()
             # Fallback: try numeric PK
             if obj is None and value.isdigit():
-                obj = Branch.objects.filter(pk=int(value)).first()
+                obj = qs.filter(pk=int(value)).first()
             self._cache[key] = obj
         return self._cache[key]
 
@@ -116,8 +157,7 @@ class UnitConversionGroupByNameWidget(ForeignKeyWidget):
             return None
         key = value.lower()
         if key not in self._cache:
-            obj = UnitConversionGroup.objects.filter(
-                name__iexact=value).first()
+            obj = UnitConversionGroup.objects.filter(name__iexact=value).first()
             # Fallback: try numeric PK (ID)
             if obj is None and value.isdigit():
                 obj = UnitConversionGroup.objects.filter(pk=int(value)).first()
@@ -214,7 +254,7 @@ class ProductImportResource(resources.ModelResource):
     companyId = fields.Field(
         attribute="companyId",
         column_name="companyId",
-        widget=CompanyByNameWidget(),
+        widget=CompanyByCodeOrNameWidget(),
     )
     branch = fields.Field(
         attribute="branch",
@@ -232,6 +272,11 @@ class ProductImportResource(resources.ModelResource):
         attribute="display_unit",
         column_name="display_unit",
         widget=UnitByNameOrIdWidget(Unit, "name"),
+    )
+    unit_conversion_group = fields.Field(
+        attribute="unit_conversion_group",
+        column_name="unit_conversion_group",
+        widget=UnitConversionGroupByNameWidget(),
     )
 
     # Unit fields
@@ -262,6 +307,7 @@ class ProductImportResource(resources.ModelResource):
         "generic name": "generic_name",
         # Company/branch
         "company": "companyId",
+        "company code": "companyId",
         "company name": "companyId",
         "company id": "companyId",
         "companyid": "companyId",
@@ -275,21 +321,30 @@ class ProductImportResource(resources.ModelResource):
         "primary unit": "unit",
         "unit name": "unit",
         "display unit": "display_unit",
+        "disploy unit": "display_unit",
         # Unit conversion
+        "unit conversion group": "unit_conversion_group",
+        "unit conversion": "unit_conversion_group",
         # Stock & inventory
         "stock": "stock_quantity",
+        "stock quanity": "stock_quantity",
         "stock quantity": "stock_quantity",
         "initial stock": "stock_quantity",
         "in stock": "in_stock",
         "in_stock": "in_stock",
         "low stock threshold": "low_stock_threshold",
+        "low sotkc threshold": "low_stock_threshold",
         "low stock": "low_stock_threshold",
         "low_stock_threshold": "low_stock_threshold",
         "quantity": "quantity",
+        "quanitty": "quantity",
         "max quantity": "quantity",
         "location type": "location_type",
         "location": "location_type",
         "location id": "location_id",
+        "location code": "location_id",
+        "warehouse code": "location_id",
+        "branch location code": "location_id",
         "warehouse id": "location_id",
         "branch id": "location_id",
         # Pricing
@@ -361,20 +416,7 @@ class ProductImportResource(resources.ModelResource):
 
     def _resolve_company(self, raw_value):
         """Resolve company lookup values to a Company instance or None."""
-        if raw_value is None:
-            return None
-
-        if isinstance(raw_value, Company):
-            return raw_value
-
-        raw_text = str(raw_value).strip()
-        if not raw_text:
-            return None
-
-        if raw_text.isdigit():
-            return Company.objects.filter(pk=int(raw_text)).first()
-
-        return Company.objects.filter(name__iexact=raw_text).first()
+        return resolve_company_for_import(raw_value)
 
     def get_instance(self, instance_loader, row):
         """Find an existing product by company and code before import."""
@@ -385,8 +427,7 @@ class ProductImportResource(resources.ModelResource):
         if company is not None and self._has_value(code):
             code_value = str(code).strip()
             if code_value:
-                cache_key = (getattr(company, "pk", company),
-                             code_value.lower())
+                cache_key = (getattr(company, "pk", company), code_value.lower())
                 if not hasattr(self, "_product_instance_cache"):
                     self._product_instance_cache = {}
                 if cache_key not in self._product_instance_cache:
@@ -437,6 +478,7 @@ class ProductImportResource(resources.ModelResource):
             "branch",
             "unit",
             "display_unit",
+            "unit_conversion_group",
             "location_type",
             "location_id",
             "mfg_date",
@@ -464,8 +506,7 @@ class ProductImportResource(resources.ModelResource):
         kept_rows = []
         for raw_row in original_rows:
             row_dict = {
-                normalized_headers[idx]: raw_row[idx] if idx < len(
-                    raw_row) else None
+                normalized_headers[idx]: raw_row[idx] if idx < len(raw_row) else None
                 for idx in range(len(normalized_headers))
             }
             if self._row_has_meaningful_data(row_dict):
@@ -485,26 +526,39 @@ class ProductImportResource(resources.ModelResource):
             pass
 
         if generic_index is not None:
+            company_index = None
+            try:
+                company_index = normalized_headers.index("companyId")
+            except ValueError:
+                pass
+
             existing_generics = set(
-                GenericName.objects.values_list("name", flat=True))
+                GenericName.objects.values_list("companyId_id", "name")
+            )
             generics_to_create = set()
 
             for row in dataset:
                 value = (row[generic_index] or "").strip()
+                company = None
+                if company_index is not None and company_index < len(row):
+                    company = resolve_company_for_import(row[company_index])
+                key = (getattr(company, "pk", None), value)
                 if (
                     value
-                    and value not in existing_generics
-                    and value not in generics_to_create
+                    and key not in existing_generics
+                    and key not in generics_to_create
                 ):
-                    generics_to_create.add(value)
+                    generics_to_create.add(key)
 
             if generics_to_create:
                 GenericName.objects.bulk_create(
-                    [GenericName(name=name) for name in generics_to_create],
+                    [
+                        GenericName(name=name, companyId_id=company_id)
+                        for company_id, name in generics_to_create
+                    ],
                     ignore_conflicts=True,
                 )
-                print(
-                    f"✓ Pre-created {len(generics_to_create)} GenericName objects")
+                print(f"✓ Pre-created {len(generics_to_create)} GenericName objects")
 
     def before_import_row(self, row, **kwargs):
         """
@@ -523,29 +577,30 @@ class ProductImportResource(resources.ModelResource):
 
         # Stock quantity mapping
         stock_quantity = row.get("stock_quantity")
-        if stock_quantity is not None:
+        if self._has_value(stock_quantity):
             try:
-                stock_val = int(str(stock_quantity).strip()
-                                ) if stock_quantity else 0
+                stock_val = int(str(stock_quantity).strip()) if stock_quantity else 0
                 row["in_stock"] = max(0, stock_val)
                 row["_import_stock_quantity"] = max(0, stock_val)
             except (ValueError, AttributeError, TypeError):
                 row["in_stock"] = 0
                 row["_import_stock_quantity"] = 0
+        else:
+            row.pop("stock_quantity", None)
+            row.pop("_import_stock_quantity", None)
 
         # Quantity (max capacity)
         quantity = row.get("quantity")
-        if not self._has_value(quantity):
-            row["quantity"] = row.get("in_stock", 0)
-        else:
+        if self._has_value(quantity):
             try:
                 row["quantity"] = max(0, int(str(quantity).strip()))
             except (ValueError, AttributeError, TypeError):
                 row["quantity"] = row.get("in_stock", 0)
+        else:
+            row.pop("quantity", None)
 
         # Price field cleanup
-        price_fields = ["price", "priceSale",
-                        "regular_price", "supplier_price", "mrp"]
+        price_fields = ["price", "priceSale", "regular_price", "supplier_price", "mrp"]
         for field in price_fields:
             if field in row:
                 value = row[field]
@@ -569,12 +624,11 @@ class ProductImportResource(resources.ModelResource):
         low_stock = row.get("low_stock_threshold")
         if self._has_value(low_stock):
             try:
-                row["low_stock_threshold"] = max(
-                    0, int(str(low_stock).strip()))
+                row["low_stock_threshold"] = max(0, int(str(low_stock).strip()))
             except (ValueError, AttributeError, TypeError):
                 row["low_stock_threshold"] = 20
         else:
-            row["low_stock_threshold"] = 20
+            row.pop("low_stock_threshold", None)
 
         # Auto-generate code if missing (company + branch prefix + random suffix)
         if not self._has_value(row.get("code")):
@@ -583,12 +637,10 @@ class ProductImportResource(resources.ModelResource):
             company_val = str(row.get("companyId") or "").strip()
             branch_val = str(row.get("branch") or "").strip()
             co_prefix = (
-                (company_val[:3] if company_val else "CO").upper().replace(
-                    " ", "")
+                (company_val[:3] if company_val else "CO").upper().replace(" ", "")
             )
             br_prefix = (
-                (branch_val[:3] if branch_val else "BR").upper().replace(
-                    " ", "")
+                (branch_val[:3] if branch_val else "BR").upper().replace(" ", "")
             )
             suffix = _uuid.uuid4().hex[:6].upper()
             row["code"] = f"{co_prefix}-{br_prefix}-{suffix}"
@@ -596,6 +648,37 @@ class ProductImportResource(resources.ModelResource):
         # Store location data for StockSummary creation
         row["_import_location_type"] = row.get("location_type")
         row["_import_location_id"] = row.get("location_id")
+
+    def _resolve_location(self, location_type, location_id, company=None):
+        """Resolve location by code first, then by name, then by numeric PK."""
+        loc_type = str(location_type or "").strip().lower()
+        loc_value = str(location_id or "").strip()
+        if not loc_type or not loc_value:
+            return None, None
+
+        if loc_type == "warehouse":
+            qs = Warehouse.objects.all()
+            if company is not None:
+                qs = qs.filter(company=company)
+            warehouse = qs.filter(code__iexact=loc_value).first()
+            if warehouse is None:
+                warehouse = qs.filter(name__iexact=loc_value).first()
+            if warehouse is None and loc_value.isdigit():
+                warehouse = qs.filter(pk=int(loc_value)).first()
+            return warehouse, None
+
+        if loc_type == "branch":
+            qs = Branch.objects.all()
+            if company is not None:
+                qs = qs.filter(company=company)
+            branch = qs.filter(code__iexact=loc_value).first()
+            if branch is None:
+                branch = qs.filter(name__iexact=loc_value).first()
+            if branch is None and loc_value.isdigit():
+                branch = qs.filter(pk=int(loc_value)).first()
+            return None, branch
+
+        return None, None
 
     def skip_row(self, instance, original, row, import_validation_errors=None):
         """Skip rows flagged as empty during preprocessing."""
@@ -642,13 +725,18 @@ class ProductImportResource(resources.ModelResource):
             row = item["row"]
 
             if not instance.companyId:
-                print(
-                    f"⚠ Skipping StockSummary for product {instance.id}: no company")
+                print(f"⚠ Skipping StockSummary for product {instance.id}: no company")
                 continue
 
             stock_qty = row.get("_import_stock_quantity") or instance.in_stock
             if stock_qty is None:
                 stock_qty = 0
+
+            # Pull pricing from the saved instance (already cleaned by before_import_row)
+            price_val = instance.price or 0
+            price_sale_val = instance.priceSale or 0
+            regular_price_val = instance.regular_price or 0
+            low_stock_val = instance.low_stock_threshold or 20
 
             affected_product_ids.add(instance.id)
 
@@ -657,17 +745,13 @@ class ProductImportResource(resources.ModelResource):
 
             # Case 1: Specific warehouse/branch provided
             if location_type and location_id:
-                warehouse = None
-                branch = None
+                warehouse, branch = self._resolve_location(
+                    location_type,
+                    location_id,
+                    company=instance.companyId,
+                )
 
-                try:
-                    if location_type.lower() == "warehouse":
-                        warehouse = Warehouse.objects.get(id=int(location_id))
-                    elif location_type.lower() == "branch":
-                        branch = Branch.objects.get(id=int(location_id))
-                    else:
-                        continue
-                except (Warehouse.DoesNotExist, Branch.DoesNotExist, ValueError):
+                if warehouse is None and branch is None:
                     print(
                         f"⚠ Location not found for product {instance.id}: {location_type} {location_id}"
                     )
@@ -682,8 +766,11 @@ class ProductImportResource(resources.ModelResource):
                             branch=branch,
                             companyId=instance.companyId,
                             location="in_warehouse" if warehouse else "in_branch",
-                            quantity=max(0, int(stock_qty)
-                                         ) if stock_qty else 0,
+                            quantity=max(0, int(stock_qty)) if stock_qty else 0,
+                            price=price_val,
+                            priceSale=price_sale_val,
+                            regular_price=regular_price_val,
+                            low_stock_threshold=low_stock_val,
                         )
                     )
 
@@ -698,6 +785,10 @@ class ProductImportResource(resources.ModelResource):
                         companyId=instance.companyId,
                         location="in_warehouse",
                         quantity=max(0, int(stock_qty)) if stock_qty else 0,
+                        price=price_val,
+                        priceSale=price_sale_val,
+                        regular_price=regular_price_val,
+                        low_stock_threshold=low_stock_val,
                     )
                 )
 
@@ -712,6 +803,10 @@ class ProductImportResource(resources.ModelResource):
                         companyId=instance.companyId,
                         location="in_branch",
                         quantity=max(0, int(stock_qty)) if stock_qty else 0,
+                        price=price_val,
+                        priceSale=price_sale_val,
+                        regular_price=regular_price_val,
+                        low_stock_threshold=low_stock_val,
                     )
                 )
 
@@ -729,8 +824,7 @@ class ProductImportResource(resources.ModelResource):
                     stock_summaries_to_create, batch_size=2000, ignore_conflicts=True
                 )
 
-                print(
-                    f"✓ Created {len(created)} ProductBranchInventory records")
+                print(f"✓ Created {len(created)} ProductBranchInventory records")
 
                 # Recalculate Product.in_stock
                 print(
@@ -743,8 +837,7 @@ class ProductImportResource(resources.ModelResource):
                             product_id=product_id
                         ).aggregate(total=Sum("quantity"))["total"]
                     ) or 0
-                    Product.objects.filter(
-                        pk=product_id).update(in_stock=total)
+                    Product.objects.filter(pk=product_id).update(in_stock=total)
 
                 print(
                     f"✓ Recalculated in_stock for {len(affected_product_ids)} products"
@@ -784,8 +877,7 @@ class ProductBranchInventoryAdmin(admin.ModelAdmin):
         "available",
     )
     list_filter = ("branch",)
-    search_fields = ("product__name", "product__code",
-                     "branch__name", "branch__code")
+    search_fields = ("product__name", "product__code", "branch__name", "branch__code")
     autocomplete_fields = ("product", "branch")
     list_per_page = 50
 
@@ -1117,8 +1209,7 @@ class ProductBatchAdmin(admin.ModelAdmin):
         "receivedAt",
     )
     list_filter = ("branch",)
-    search_fields = ("batch_no", "product__name",
-                     "product__sku", "product__code")
+    search_fields = ("batch_no", "product__name", "product__sku", "product__code")
     autocomplete_fields = ("product", "branch", "supplier")
     list_per_page = 50
     list_filter = ("id",)
@@ -1174,13 +1265,11 @@ class InventoryItemAdmin(ImportExportModelAdmin):
     fieldsets = (
         (
             "Basic Information",
-            {"fields": ("name", "category", "unit", "sku",
-                        "description", "location")},
+            {"fields": ("name", "category", "unit", "sku", "description", "location")},
         ),
         (
             "Stock Information",
-            {"fields": ("current_stock", "reorder_level",
-                        "max_stock", "status")},
+            {"fields": ("current_stock", "reorder_level", "max_stock", "status")},
         ),
         ("Cost Information", {"fields": ("cost_per_unit", "total_value")}),
         ("Supplier Information", {"fields": ("supplier",)}),

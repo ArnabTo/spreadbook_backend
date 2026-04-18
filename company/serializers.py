@@ -277,6 +277,7 @@ class CompanySerializer(serializers.ModelSerializer):
             # Basic company info
             "id",
             "name",
+            "company_code",
             "email",
             "phoneNumber",
             "phone",
@@ -445,6 +446,7 @@ class CompanyListSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "name",
+            "company_code",
             "email",
             "phoneNumber",
             "phone",

@@ -3,6 +3,7 @@ from django.contrib.auth import get_user_model
 from utils import random
 from utils.models.common_fields import Timestamp
 from django.utils.timezone import now
+from django.utils.text import slugify
 
 User = get_user_model()
 
@@ -20,12 +21,17 @@ class Company(models.Model):
         null=True,
         blank=True,
     )
-    companyId = models.CharField(
-        max_length=100, default="", blank=True, null=True)
-    fullAddress = models.CharField(
-        max_length=200, default="", blank=True, null=True)
-    description = models.CharField(
-        max_length=300, default="", blank=True, null=True)
+    companyId = models.CharField(max_length=100, default="", blank=True, null=True)
+    company_code = models.CharField(
+        max_length=20,
+        unique=True,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Unique company code used for imports and branch code generation.",
+    )
+    fullAddress = models.CharField(max_length=200, default="", blank=True, null=True)
+    description = models.CharField(max_length=300, default="", blank=True, null=True)
     avatarUrl = models.ImageField(upload_to=upload_to, blank=True, null=True)
     url = models.URLField(blank=True, null=True)
     postedAt = models.DateTimeField(default=now, blank=True, null=True)
@@ -223,8 +229,7 @@ class Company(models.Model):
     )
     setupFeeStatus = models.CharField(
         max_length=50,
-        choices=[("pending", "Pending"),
-                 ("paid", "Paid"), ("waived", "Waived")],
+        choices=[("pending", "Pending"), ("paid", "Paid"), ("waived", "Waived")],
         null=True,
         blank=True,
         help_text="Setup fee payment status",
@@ -270,6 +275,29 @@ class Company(models.Model):
 
     def __str__(self):
         return self.name or "Unnamed Company"
+
+    @staticmethod
+    def _base_company_code(name):
+        """Build a short alphanumeric base code from company name."""
+        normalized = slugify(name or "").upper().replace("-", "")
+        if not normalized:
+            return "CMP"
+        return normalized[:6]
+
+    def save(self, *args, **kwargs):
+        if not self.company_code:
+            base_code = self._base_company_code(self.name)
+            candidate = base_code
+            serial = 1
+            while (
+                Company.objects.exclude(pk=self.pk)
+                .filter(company_code__iexact=candidate)
+                .exists()
+            ):
+                serial += 1
+                candidate = f"{base_code}{serial:02d}"[:20]
+            self.company_code = candidate
+        super().save(*args, **kwargs)
 
     @property
     def branch_count(self):
@@ -371,8 +399,7 @@ class Branch(models.Model):
     activeTables = models.PositiveIntegerField(
         default=0, help_text="Number of active/occupied tables"
     )
-    staff = models.PositiveIntegerField(
-        default=0, help_text="Number of staff members")
+    staff = models.PositiveIntegerField(default=0, help_text="Number of staff members")
 
     # Status
     status = models.CharField(
@@ -432,10 +459,30 @@ class Branch(models.Model):
     def save(self, *args, **kwargs):
         # Auto-generate code if not provided
         if not self.code and self.company:
-            company_prefix = (self.company.name or "BR")[:2].upper()
-            branch_count = Branch.objects.filter(
-                company=self.company).count() + 1
-            self.code = f"{company_prefix}{branch_count:03d}"
+            company_prefix = "".join(
+                char
+                for char in str(
+                    self.company.company_code or self.company.companyId or "CMP"
+                ).upper()
+                if char.isalnum()
+            )[:8]
+            if not company_prefix:
+                company_prefix = "CMP"
+
+            branch_count = (
+                Branch.objects.filter(company=self.company).exclude(pk=self.pk).count()
+            ) + 1
+
+            while True:
+                candidate_code = f"{company_prefix}-BR{branch_count:03d}"
+                if (
+                    not Branch.objects.exclude(pk=self.pk)
+                    .filter(code__iexact=candidate_code)
+                    .exists()
+                ):
+                    self.code = candidate_code
+                    break
+                branch_count += 1
 
         # Sync status fields
         if self.is_active:
@@ -559,8 +606,7 @@ class Warehouse(models.Model):
         # Auto-generate code if not provided
         if not self.code and self.company:
             company_prefix = (self.company.name or "WH")[:2].upper()
-            wh_count = Warehouse.objects.filter(
-                company=self.company).count() + 1
+            wh_count = Warehouse.objects.filter(company=self.company).count() + 1
             self.code = f"WH{company_prefix}{wh_count:03d}"
 
         # Sync status fields

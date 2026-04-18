@@ -1,0 +1,9 @@
+companyId,branch,code,name,category,generic_name,brand_name,location_type,location_id,description,dosage_form,strength,price
+RAKTCH,"RA001	",MED-0001,Paracetamol 500mg Tablet,Pain Relief,Paracetamol,Napa,branch,"	RA001	",Pain reliever and fever reducer,Tablet,500,60
+RAKTCH,"RA001	",MED-0002,Ibuprofen 400mg Tablet,Pain Relief,Ibuprofen,Brufen,branch,"	RA001	",Anti-inflammatory tablet,Tablet,400,80
+RAKTCH,"RA001	",MED-0003,Amoxicillin 500mg Capsule,Antibiotic,Amoxicillin,Amoxil,branch,"	RA001	",Broad-spectrum antibiotic,Capsule,500,110
+RAKTCH,"RA001	",MED-0004,Cetirizine 10mg Tablet,Allergy,Cetirizine,Zyrtec,branch,"	RA001	",Anti-allergy medicine,Tablet,10,45
+RAKTCH,"RA001	",MED-0005,Vitamin C 1000mg Tablet,Vitamins,Ascorbic Acid,Ascorbic,branch,"	RA001	",Immune support supplement,Tablet,100,35
+RAKTCH,"RA001	",MED-0006,Omeprazole 20mg Capsule,Gastro,Omeprazole,Seclo,branch,"	RA001	",Capsule,20mg,5,
+RAKTCH,"RA001	",MED-0007,Metformin 500mg Tablet,Diabetes,Metformin,Comet,branch,"	RA001	",Type 2 diabetes management,Tablet,500,32
+RAKTCH,"RA001	",MED-0008,Azithromycin 500mg Tablet,Antibiotic,Azithromycin,Zimax,branch,"	RA001	",Antibiotic for bacterial infections,Tablet,500,105

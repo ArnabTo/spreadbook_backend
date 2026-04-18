@@ -33,10 +33,17 @@ class CompanyCustomizationInline(admin.StackedInline):
 class CompanyAdmin(admin.ModelAdmin):
     """Enhanced admin interface for Company model"""
 
-    list_display = ["id", "name", "email",
-                    "phoneNumber", "branch_count", "postedAt"]
+    list_display = [
+        "id",
+        "name",
+        "company_code",
+        "email",
+        "phoneNumber",
+        "branch_count",
+        "postedAt",
+    ]
     list_filter = ["postedAt", "updateAt"]
-    search_fields = ["name", "email", "phoneNumber"]
+    search_fields = ["name", "company_code", "email", "phoneNumber"]
     readonly_fields = ["postedAt", "updateAt", "branch_count"]
 
     fieldsets = (
@@ -45,6 +52,7 @@ class CompanyAdmin(admin.ModelAdmin):
             {
                 "fields": (
                     "name",
+                    "company_code",
                     "email",
                     "phoneNumber",
                     "fullAddress",
@@ -67,10 +75,8 @@ class CompanyAdmin(admin.ModelAdmin):
                 )
             },
         ),
-        ("Statistics", {"fields": ("branch_count",),
-         "classes": ("collapse",)}),
-        ("Timestamps", {"fields": ("postedAt",
-         "updateAt"), "classes": ("collapse",)}),
+        ("Statistics", {"fields": ("branch_count",), "classes": ("collapse",)}),
+        ("Timestamps", {"fields": ("postedAt", "updateAt"), "classes": ("collapse",)}),
     )
 
     inlines = [BranchInline, WarehouseInline, CompanyCustomizationInline]
@@ -94,12 +100,13 @@ class BranchAdmin(admin.ModelAdmin):
     ]
     list_filter = ["is_active", "company", "city", "postedAt"]
     search_fields = ["name", "code", "phoneNumber", "email"]
-    readonly_fields = ["code", "postedAt",
-                       "updateAt", "user_count", "full_address"]
+    readonly_fields = ["code", "postedAt", "updateAt", "user_count", "full_address"]
 
     fieldsets = (
-        ("Basic Information", {
-         "fields": ("company", "warehouse", "name", "code", "manager")}),
+        (
+            "Basic Information",
+            {"fields": ("company", "warehouse", "name", "code", "manager")},
+        ),
         (
             "Contact Information",
             {
@@ -127,8 +134,7 @@ class BranchAdmin(admin.ModelAdmin):
             {"fields": ("seating_capacity", "delivery_radius", "opening_hours")},
         ),
         ("Status & Statistics", {"fields": ("is_active", "user_count")}),
-        ("Timestamps", {"fields": ("postedAt",
-         "updateAt"), "classes": ("collapse",)}),
+        ("Timestamps", {"fields": ("postedAt", "updateAt"), "classes": ("collapse",)}),
     )
 
     def get_company_id(self, obj):
@@ -183,14 +189,22 @@ class WarehouseAdmin(admin.ModelAdmin):
     ]
     list_filter = ["is_active", "company", "warehouseType", "city", "postedAt"]
     search_fields = ["name", "code", "email"]
-    readonly_fields = ["code", "postedAt",
-                       "updateAt", "branch_count", "companyId"]
+    readonly_fields = ["code", "postedAt", "updateAt", "branch_count", "companyId"]
 
     fieldsets = (
         (
             "Basic Information",
-            {"fields": ("company", "name", "code", "warehouseType",
-                        "parent_warehouse", "manager", "capacity")},
+            {
+                "fields": (
+                    "company",
+                    "name",
+                    "code",
+                    "warehouseType",
+                    "parent_warehouse",
+                    "manager",
+                    "capacity",
+                )
+            },
         ),
         (
             "Contact Information",
@@ -198,10 +212,8 @@ class WarehouseAdmin(admin.ModelAdmin):
         ),
         (
             "Address",
-            {"fields": ("fullAddress", "city", "state",
-                        "country", "postal_code")},
+            {"fields": ("fullAddress", "city", "state", "country", "postal_code")},
         ),
         ("Status", {"fields": ("is_active",)}),
-        ("Timestamps", {"fields": ("postedAt",
-         "updateAt"), "classes": ("collapse",)}),
+        ("Timestamps", {"fields": ("postedAt", "updateAt"), "classes": ("collapse",)}),
     )
