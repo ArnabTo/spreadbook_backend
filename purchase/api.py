@@ -27,23 +27,24 @@ def _is_int_decimal(value: Decimal) -> bool:
 
 
 def _get_buying_unit_factor(product_id) -> Decimal:
-    """Return the conversion_to_base for this product's buying unit.
+    """Return selling_buying_scale from the Product model.
 
-    Falls back to Decimal('1') (no conversion) when no buying unit is configured.
-    Used to convert buying-unit quantity to base-stock-unit quantity on PO receive.
+    This is how many selling/stored units equal ONE buying unit
+    (e.g. selling_buying_scale=10 means 1 Box = 10 Pieces).
+    Falls back to Decimal('1') when not configured.
     """
-    from products.models.product_model import ProductUnit
+    from products.models.product_model import Product
 
-    factor = (
-        ProductUnit.objects.filter(product_id=product_id, is_buying_unit=True)
-        .order_by("-is_default", "id")
-        .values_list("conversion_to_base", flat=True)
+    scale = (
+        Product.objects.filter(pk=product_id)
+        .values_list("selling_buying_scale", flat=True)
         .first()
     )
-    if factor is None:
+    if scale is None:
         return Decimal("1")
     try:
-        return Decimal(str(factor))
+        result = Decimal(str(scale))
+        return result if result > 0 else Decimal("1")
     except Exception:
         return Decimal("1")
 
@@ -408,8 +409,7 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        items = requisition.items.select_related(
-            "product", "inventory_item").all()
+        items = requisition.items.select_related("product", "inventory_item").all()
         if not items:
             return Response(
                 {"detail": "Requisition has no items."},
@@ -531,8 +531,7 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
                     _receive_purchase_order_in_atomic(po, actor=actor)
                 except Exception as exc:
                     return Response(
-                        {"detail": str(
-                            exc) or "Failed to receive purchase order."},
+                        {"detail": str(exc) or "Failed to receive purchase order."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
@@ -694,8 +693,7 @@ class QuickPurchaseViewSet(viewsets.ModelViewSet):
                     else None
                 ),
                 sku=(
-                    str(sku).strip() if sku is not None and str(
-                        sku).strip() else None
+                    str(sku).strip() if sku is not None and str(sku).strip() else None
                 ),
                 price=float(qp.unit_price or 0),
                 in_stock=remaining,
@@ -787,8 +785,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                     if branch_id and str(branch_id) not in {
                         str(bid) for bid in allowed_branch_ids
                     }:
-                        raise PermissionDenied(
-                            "You do not have access to this branch")
+                        raise PermissionDenied("You do not have access to this branch")
                     qs = qs.filter(branch_id__in=allowed_branch_ids)
                 elif getattr(user, "companyId_id", None):
                     qs = qs.filter(companyId_id=user.companyId_id)
@@ -840,8 +837,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                 if allowed_branch_ids and str(branch_id) not in {
                     str(bid) for bid in allowed_branch_ids
                 }:
-                    raise PermissionDenied(
-                        "You do not have access to this branch")
+                    raise PermissionDenied("You do not have access to this branch")
 
             # Auto-assign company from user if not provided
             if not company_id and getattr(self.request.user, "companyId_id", None):
@@ -941,8 +937,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                 _receive_purchase_order_in_atomic(po, actor=actor)
             except Exception as exc:
                 return Response(
-                    {"detail": str(
-                        exc) or "Failed to receive purchase order."},
+                    {"detail": str(exc) or "Failed to receive purchase order."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
@@ -1047,12 +1042,10 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
         # Verify item belongs to this PO — direct FK or product/variant match
         product_ids = set(
-            po.items.exclude(product__isnull=True).values_list(
-                "product_id", flat=True)
+            po.items.exclude(product__isnull=True).values_list("product_id", flat=True)
         )
         variant_ids = set(
-            po.items.exclude(variant__isnull=True).values_list(
-                "variant_id", flat=True)
+            po.items.exclude(variant__isnull=True).values_list("variant_id", flat=True)
         )
         belongs = (
             item.purchase_order_id == po.uuid
@@ -1108,12 +1101,10 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
             )
 
         product_ids = set(
-            po.items.exclude(product__isnull=True).values_list(
-                "product_id", flat=True)
+            po.items.exclude(product__isnull=True).values_list("product_id", flat=True)
         )
         variant_ids = set(
-            po.items.exclude(variant__isnull=True).values_list(
-                "variant_id", flat=True)
+            po.items.exclude(variant__isnull=True).values_list("variant_id", flat=True)
         )
 
         scope_qs = ProductSerialItem.objects.filter(
@@ -1314,8 +1305,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                 try:
                     if po.requisition.status == "approved":
                         po.requisition.status = "converted"
-                        po.requisition.save(
-                            update_fields=["status", "updated_at"])
+                        po.requisition.save(update_fields=["status", "updated_at"])
                 except Exception:
                     pass
 

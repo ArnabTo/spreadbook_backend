@@ -125,8 +125,7 @@ class InventoryItemViewSet(viewsets.ModelViewSet):
             ) or self.request.query_params.get("branchId")
             if requested_branch_id:
                 if str(requested_branch_id) not in allowed_branch_ids:
-                    raise PermissionDenied(
-                        "You do not have access to this branch")
+                    raise PermissionDenied("You do not have access to this branch")
                 qs = qs.filter(branch_id=requested_branch_id)
             else:
                 qs = qs.filter(
@@ -203,11 +202,9 @@ class InventoryItemViewSet(viewsets.ModelViewSet):
         qs = self.get_queryset()
 
         total_items = qs.count()
-        low_stock_count = qs.filter(
-            current_stock__lte=F("reorder_level")).count()
+        low_stock_count = qs.filter(current_stock__lte=F("reorder_level")).count()
         out_of_stock_count = qs.filter(current_stock__lte=0).count()
-        total_value = qs.aggregate(total=Sum("total_value"))[
-            "total"] or Decimal("0.00")
+        total_value = qs.aggregate(total=Sum("total_value"))["total"] or Decimal("0.00")
 
         categories_qs = InventoryCategory.objects.filter(is_active=True)
         user = getattr(request, "user", None)
@@ -215,8 +212,7 @@ class InventoryItemViewSet(viewsets.ModelViewSet):
             company_ids = get_company_ids_for_user(user)
             if company_ids:
                 categories_qs = categories_qs.filter(
-                    Q(companyId_id__in=list(company_ids)) | Q(
-                        companyId_id__isnull=True)
+                    Q(companyId_id__in=list(company_ids)) | Q(companyId_id__isnull=True)
                 )
             else:
                 categories_qs = categories_qs.none()
@@ -244,11 +240,9 @@ class InventoryItemViewSet(viewsets.ModelViewSet):
             quantity = serializer.validated_data["quantity"]
             reason = serializer.validated_data.get("reason", "Stock addition")
             notes = serializer.validated_data.get("notes", "")
-            reference_number = serializer.validated_data.get(
-                "reference_number", "")
+            reference_number = serializer.validated_data.get("reference_number", "")
             expiry_date = serializer.validated_data.get("expiry_date")
-            warranty_expiry_date = serializer.validated_data.get(
-                "warranty_expiry_date")
+            warranty_expiry_date = serializer.validated_data.get("warranty_expiry_date")
 
             # Record previous stock
             previous_stock = inventory_item.current_stock
@@ -297,11 +291,9 @@ class InventoryItemViewSet(viewsets.ModelViewSet):
             quantity = serializer.validated_data["quantity"]
             reason = serializer.validated_data.get("reason", "Stock reduction")
             notes = serializer.validated_data.get("notes", "")
-            reference_number = serializer.validated_data.get(
-                "reference_number", "")
+            reference_number = serializer.validated_data.get("reference_number", "")
             expiry_date = serializer.validated_data.get("expiry_date")
-            warranty_expiry_date = serializer.validated_data.get(
-                "warranty_expiry_date")
+            warranty_expiry_date = serializer.validated_data.get("warranty_expiry_date")
 
             # Check if enough stock available
             if inventory_item.current_stock < quantity:
@@ -391,6 +383,8 @@ class StockSummaryInventoryView(APIView):
             "product",
             "product__unit",
             "product__display_unit",
+            "product__buying_unit",
+            "product__selling_unit",
             "product__supplier",
             "product__generic_name",
             "product__brand",
@@ -405,8 +399,7 @@ class StockSummaryInventoryView(APIView):
         else:
             qs = qs.filter(warehouse_id=warehouse_id, location="in_warehouse")
 
-        search = request.query_params.get(
-            "search") or request.query_params.get("q")
+        search = request.query_params.get("search") or request.query_params.get("q")
         if search:
             qs = qs.filter(
                 Q(product__name__icontains=search)
@@ -448,8 +441,7 @@ class StockSummaryInventoryView(APIView):
                 product_rows[pid] = product_entry
 
             product_entry["rows"].append(row)
-            product_entry["current_stock"] += max(
-                float(row.quantity or 0), 0.0)
+            product_entry["current_stock"] += max(float(row.quantity or 0), 0.0)
 
         def format_timestamp(value):
             if not value:
@@ -484,13 +476,41 @@ class StockSummaryInventoryView(APIView):
         for pid, group in product_rows.items():
             product = group["product"]
             current_stock = max(group["current_stock"], 0)
-            low_stock_threshold = int(product.low_stock_threshold or 20)
+            non_variant_row = next(
+                (r for r in group["rows"] if not getattr(r, "variant_id", None)),
+                None,
+            )
+            if non_variant_row is not None:
+                low_stock_threshold = int(non_variant_row.low_stock_threshold or 20)
+            else:
+                row_thresholds = [
+                    int(getattr(r, "low_stock_threshold", 0) or 0)
+                    for r in group["rows"]
+                ]
+                low_stock_threshold = (
+                    max(row_thresholds)
+                    if any(t > 0 for t in row_thresholds)
+                    else int(product.low_stock_threshold or 20)
+                )
+            scale_raw = getattr(product, "selling_buying_scale", None)
+            if scale_raw in (None, "", 0):
+                scale_raw = getattr(product, "selling_unit_conversion_factor", 1)
+            try:
+                scale_for_buying = float(scale_raw or 1)
+            except Exception:
+                scale_for_buying = 1.0
+            if scale_for_buying < 1:
+                scale_for_buying = 1.0
+            low_stock_input_buying_unit = (
+                float(low_stock_threshold) / scale_for_buying
+                if scale_for_buying >= 1
+                else float(low_stock_threshold)
+            )
             max_stock = int(product.quantity or low_stock_threshold * 5 or 100)
             cost_per_unit = float(product.supplier_price or product.price or 0)
             stock_status = derive_status(current_stock, low_stock_threshold)
             status_display = to_status_display(stock_status)
-            stock_percentage = (current_stock / max_stock) * \
-                100 if max_stock > 0 else 0
+            stock_percentage = (current_stock / max_stock) * 100 if max_stock > 0 else 0
             is_low_stock = stock_status in {"low", "critical", "out_of_stock"}
 
             # Build product_units list from prefetched rows
@@ -508,6 +528,18 @@ class StockSummaryInventoryView(APIView):
                 }
                 for pu in product.units.all()
             ]
+            buying_unit_name = next(
+                (pu["unit_name"] for pu in product_units if pu.get("is_buying_unit")),
+                None,
+            ) or getattr(product.buying_unit, "name", None)
+            selling_unit_name = next(
+                (
+                    pu["unit_name"]
+                    for pu in product_units
+                    if pu.get("is_default_selling") or pu.get("is_selling_unit")
+                ),
+                None,
+            ) or getattr(product.selling_unit, "name", None)
 
             variants = []
             for row in group["rows"]:
@@ -531,8 +563,7 @@ class StockSummaryInventoryView(APIView):
                 else ""
             )
             supplier_name = (
-                getattr(product.supplier, "name",
-                        "") if product.supplier else ""
+                getattr(product.supplier, "name", "") if product.supplier else ""
             )
             generic_name = (
                 getattr(product.generic_name, "name", None)
@@ -554,8 +585,7 @@ class StockSummaryInventoryView(APIView):
                     "category_name": category_name,
                     "unit": product.unit_id,
                     "unit_name": (
-                        getattr(product.unit, "name",
-                                "") if product.unit else ""
+                        getattr(product.unit, "name", "") if product.unit else ""
                     ),
                     "current_stock": current_stock,
                     "reorder_level": low_stock_threshold,
@@ -595,6 +625,15 @@ class StockSummaryInventoryView(APIView):
                         if product.display_unit
                         else None
                     ),
+                    "buying_unit": getattr(product, "buying_unit_id", None),
+                    "selling_unit": getattr(product, "selling_unit_id", None),
+                    "buying_unit_name": buying_unit_name,
+                    "selling_unit_name": selling_unit_name,
+                    "selling_buying_scale": scale_for_buying,
+                    "selling_unit_conversion_factor": float(
+                        getattr(product, "selling_unit_conversion_factor", 1) or 1
+                    ),
+                    "low_stock_input_buying_unit": low_stock_input_buying_unit,
                     "product_units": product_units,
                     "price": float(product.price or 0),
                     "priceSale": float(product.priceSale or 0),
@@ -612,8 +651,7 @@ class StockSummaryInventoryView(APIView):
 
         if inventory_type:
             inventory_type = (
-                str(inventory_type).strip().lower().replace(
-                    "_", " ").replace("-", " ")
+                str(inventory_type).strip().lower().replace("_", " ").replace("-", " ")
             )
             mapped = inventory_type
             if mapped == "low stock":
@@ -644,8 +682,7 @@ class StockSummaryInventoryView(APIView):
                     and i["current_stock"] <= i["reorder_level"]
                 ]
             elif mapped == "in stock":
-                items = [i for i in items if i["current_stock"]
-                         > i["reorder_level"]]
+                items = [i for i in items if i["current_stock"] > i["reorder_level"]]
             elif mapped == "medium":
                 items = [
                     i
@@ -677,15 +714,14 @@ class StockSummaryInventoryView(APIView):
 
         try:
             page = max(1, int(request.query_params.get("page", 1)))
-            page_size = min(
-                200, max(1, int(request.query_params.get("page_size", 80))))
+            page_size = min(200, max(1, int(request.query_params.get("page_size", 80))))
         except (ValueError, TypeError):
             page = 1
             page_size = 80
 
         total = len(items)
         offset = (page - 1) * page_size
-        paged_items = items[offset: offset + page_size]
+        paged_items = items[offset : offset + page_size]
         has_next = offset + page_size < total
         has_prev = page > 1
 
@@ -753,8 +789,7 @@ class StockMovementViewSet(viewsets.ReadOnlyModelViewSet):
             ) or self.request.query_params.get("branchId")
             if requested_branch_id:
                 if str(requested_branch_id) not in allowed_branch_ids:
-                    raise PermissionDenied(
-                        "You do not have access to this branch")
+                    raise PermissionDenied("You do not have access to this branch")
                 qs = qs.filter(inventory_item__branch_id=requested_branch_id)
             else:
                 qs = qs.filter(
