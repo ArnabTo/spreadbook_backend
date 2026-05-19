@@ -85,7 +85,8 @@ class PurchaseRequisitionSerializer(serializers.ModelSerializer):
         requisition = PurchaseRequisition.objects.create(**validated_data)
 
         for item_data in items_data:
-            PurchaseRequisitionItem.objects.create(requisition=requisition, **item_data)
+            PurchaseRequisitionItem.objects.create(
+                requisition=requisition, **item_data)
 
         return requisition
 
@@ -138,6 +139,11 @@ class PurchaseOrderItemSerializer(serializers.ModelSerializer):
             "variant_color",
             "variant_unique_code",
             "quantity",
+            "ordered_quantity",
+            "received_quantity",
+            "remaining_quantity",
+            "damaged_quantity",
+            "returned_quantity",
             "unit",
             "unit_price",
             "selling_price",
@@ -172,10 +178,13 @@ class PurchaseOrderItemSerializer(serializers.ModelSerializer):
 
 class PurchaseOrderSerializer(serializers.ModelSerializer):
     items = PurchaseOrderItemSerializer(many=True)
-    supplier_name = serializers.CharField(source="supplier.name", read_only=True)
+    supplier_name = serializers.CharField(
+        source="supplier.name", read_only=True)
     branch_name = serializers.CharField(source="branch.name", read_only=True)
-    warehouse_name = serializers.CharField(source="warehouse.name", read_only=True)
-    company_name = serializers.CharField(source="companyId.name", read_only=True)
+    warehouse_name = serializers.CharField(
+        source="warehouse.name", read_only=True)
+    company_name = serializers.CharField(
+        source="companyId.name", read_only=True)
     requisition_number = serializers.CharField(
         source="requisition.pr_number", read_only=True
     )
@@ -243,6 +252,12 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
         items_data = validated_data.pop("items", [])
         po = PurchaseOrder.objects.create(**validated_data)
         for item_data in items_data:
+            qty = item_data.get("ordered_quantity")
+            if qty is None:
+                qty = item_data.get("quantity", 0)
+            item_data.setdefault("ordered_quantity", qty)
+            item_data.setdefault("remaining_quantity", qty)
+            item_data.setdefault("received_quantity", 0)
             PurchaseOrderItem.objects.create(purchase_order=po, **item_data)
         po.recalc_total()
         return po
@@ -256,7 +271,14 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
         if items_data is not None:
             instance.items.all().delete()
             for item_data in items_data:
-                PurchaseOrderItem.objects.create(purchase_order=instance, **item_data)
+                qty = item_data.get("ordered_quantity")
+                if qty is None:
+                    qty = item_data.get("quantity", 0)
+                item_data.setdefault("ordered_quantity", qty)
+                item_data.setdefault("remaining_quantity", qty)
+                item_data.setdefault("received_quantity", 0)
+                PurchaseOrderItem.objects.create(
+                    purchase_order=instance, **item_data)
             instance.recalc_total()
 
         return instance
@@ -264,7 +286,8 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
 
 class QuickPurchaseSerializer(serializers.ModelSerializer):
     sale_id = serializers.UUIDField(source="sale.id", read_only=True)
-    invoice_item_id = serializers.IntegerField(source="invoice_item.id", read_only=True)
+    invoice_item_id = serializers.IntegerField(
+        source="invoice_item.id", read_only=True)
     product_id = serializers.UUIDField(source="product.id", read_only=True)
 
     class Meta:
@@ -305,5 +328,7 @@ class QuickPurchaseConvertSerializer(serializers.Serializer):
 
     name = serializers.CharField(required=False, allow_blank=True)
     category = serializers.CharField(required=False, allow_blank=True)
-    code = serializers.CharField(required=False, allow_blank=True, allow_null=True)
-    sku = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    code = serializers.CharField(
+        required=False, allow_blank=True, allow_null=True)
+    sku = serializers.CharField(
+        required=False, allow_blank=True, allow_null=True)

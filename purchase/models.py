@@ -14,11 +14,16 @@ class Purchase(Timestamp):
     Purchase model for storing purchase data🛢
     """
 
-    uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    product = models.ForeignKey(Product, on_delete=models.SET_NULL, null=True, blank=True)
-    supplier = models.ForeignKey(Supplier, on_delete=models.SET_NULL, null=True, blank=True)
-    invoice_number = models.CharField(max_length=4, unique=True, null=True, blank=True)
-    purchase_id = models.CharField(max_length=8, unique=True, null=True, blank=True)
+    uuid = models.UUIDField(
+        primary_key=True, default=uuid.uuid4, editable=False)
+    product = models.ForeignKey(
+        Product, on_delete=models.SET_NULL, null=True, blank=True)
+    supplier = models.ForeignKey(
+        Supplier, on_delete=models.SET_NULL, null=True, blank=True)
+    invoice_number = models.CharField(
+        max_length=4, unique=True, null=True, blank=True)
+    purchase_id = models.CharField(
+        max_length=8, unique=True, null=True, blank=True)
     purchase_date = models.DateField(verbose_name="Purchase Date", default=now)
     payment_options = (
         ("cash payment", "Cash Payment"),
@@ -32,9 +37,12 @@ class Purchase(Timestamp):
         default="cash payment",
     )
     details = models.TextField(verbose_name="Details", null=True, blank=True)
-    discount = models.DecimalField(max_digits=5, decimal_places=2, default=0.00)
-    paid_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
-    due_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    discount = models.DecimalField(
+        max_digits=5, decimal_places=2, default=0.00)
+    paid_amount = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0.00)
+    due_amount = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0.00)
     total_amount = models.DecimalField(max_digits=10, decimal_places=2)
 
     def save(self, *args, **kwargs):
@@ -75,14 +83,16 @@ class PurchaseRequisition(Timestamp):
         ("urgent", "Urgent"),
     )
 
-    uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    uuid = models.UUIDField(
+        primary_key=True, default=uuid.uuid4, editable=False)
     pr_number = models.CharField(max_length=20, unique=True, editable=False)
     requested_by = models.CharField(max_length=255)
     department = models.CharField(max_length=255, blank=True, default="")
     purchase_type = models.CharField(
         max_length=20, choices=PURCHASE_TYPE_CHOICES, default="direct_inventory"
     )
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    status = models.CharField(
+        max_length=20, choices=STATUS_CHOICES, default="pending")
     request_date = models.DateField(default=now)
     required_date = models.DateField(null=True, blank=True)
     priority = models.CharField(
@@ -133,7 +143,8 @@ class PurchaseRequisitionItem(models.Model):
     Items in a purchase requisition
     """
 
-    uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    uuid = models.UUIDField(
+        primary_key=True, default=uuid.uuid4, editable=False)
     requisition = models.ForeignKey(
         PurchaseRequisition, on_delete=models.CASCADE, related_name="items"
     )
@@ -152,8 +163,10 @@ class PurchaseRequisitionItem(models.Model):
     item_name = models.CharField(max_length=255)
     quantity = models.DecimalField(max_digits=10, decimal_places=2)
     unit = models.CharField(max_length=50)
-    current_stock = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    required_stock = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    current_stock = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0)
+    required_stock = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0)
     notes = models.TextField(null=True, blank=True)
 
     def __str__(self):
@@ -169,11 +182,11 @@ class PurchaseOrder(Timestamp):
         ("approved", "Approved"),
         ("waiting_for_receive", "Waiting for Receive"),
         ("received", "Received"),
-        ("delivered", "Delivered"),
         ("cancelled", "Cancelled"),
     )
 
-    uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    uuid = models.UUIDField(
+        primary_key=True, default=uuid.uuid4, editable=False)
     po_number = models.CharField(max_length=32, unique=True, editable=False)
 
     requisition = models.ForeignKey(
@@ -210,10 +223,12 @@ class PurchaseOrder(Timestamp):
         related_name="purchase_orders",
     )
 
-    status = models.CharField(max_length=25, choices=STATUS_CHOICES, default="pending")
+    status = models.CharField(
+        max_length=25, choices=STATUS_CHOICES, default="pending")
     order_date = models.DateField(default=now)
     expected_delivery_date = models.DateField(null=True, blank=True)
-    total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0)
     notes = models.TextField(null=True, blank=True)
     payment_status = models.CharField(
         max_length=20,
@@ -232,7 +247,8 @@ class PurchaseOrder(Timestamp):
 
             date_str = datetime.now().strftime("%Y%m%d")
             last_po = (
-                PurchaseOrder.objects.filter(po_number__startswith=f"PO-{date_str}")
+                PurchaseOrder.objects.filter(
+                    po_number__startswith=f"PO-{date_str}")
                 .order_by("-po_number")
                 .first()
             )
@@ -257,7 +273,14 @@ class PurchaseOrder(Timestamp):
 
 
 class PurchaseOrderItem(models.Model):
-    uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    ITEM_STATUS_CHOICES = (
+        ("pending", "Pending"),
+        ("partially_received", "Partially Received"),
+        ("received", "Received"),
+    )
+
+    uuid = models.UUIDField(
+        primary_key=True, default=uuid.uuid4, editable=False)
     purchase_order = models.ForeignKey(
         PurchaseOrder, on_delete=models.CASCADE, related_name="items"
     )
@@ -283,21 +306,34 @@ class PurchaseOrderItem(models.Model):
     # Variant display info (denormalized for easy display)
     variant_size = models.CharField(max_length=100, null=True, blank=True)
     variant_color = models.CharField(max_length=100, null=True, blank=True)
-    variant_unique_code = models.CharField(max_length=32, null=True, blank=True)
+    variant_unique_code = models.CharField(
+        max_length=32, null=True, blank=True)
 
     quantity = models.DecimalField(max_digits=10, decimal_places=2)
+    ordered_quantity = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0)
+    received_quantity = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0)
+    remaining_quantity = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0)
+    damaged_quantity = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0)
+    returned_quantity = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0)
     unit = models.CharField(max_length=50)
-    unit_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    unit_price = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0)
     selling_price = models.DecimalField(
         max_digits=12,
         decimal_places=2,
         default=0,
         help_text="Product selling price at the time of PO creation",
     )
-    total_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total_price = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0)
     item_status = models.CharField(
-        max_length=10,
-        choices=[("pending", "Pending"), ("received", "Received")],
+        max_length=20,
+        choices=ITEM_STATUS_CHOICES,
         default="pending",
     )
     remarks = models.TextField(null=True, blank=True)
@@ -309,6 +345,26 @@ class PurchaseOrderItem(models.Model):
             self.total_price = (self.quantity or 0) * (self.unit_price or 0)
         except Exception:
             pass
+
+        # Keep new simplified quantity fields aligned with legacy `quantity`.
+        if self.ordered_quantity is None or self.ordered_quantity <= 0:
+            self.ordered_quantity = self.quantity or 0
+
+        if self.received_quantity is None or self.received_quantity < 0:
+            self.received_quantity = Decimal("0")
+
+        if self.received_quantity >= self.ordered_quantity and self.ordered_quantity > 0:
+            self.item_status = "received"
+            self.remaining_quantity = Decimal("0")
+        elif self.received_quantity > 0:
+            self.item_status = "partially_received"
+            self.remaining_quantity = max(
+                Decimal("0"), self.ordered_quantity - self.received_quantity
+            )
+        else:
+            self.item_status = "pending"
+            self.remaining_quantity = self.ordered_quantity
+
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -329,7 +385,8 @@ class QuickPurchase(Timestamp):
         ("cancelled", "Cancelled"),
     )
 
-    uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    uuid = models.UUIDField(
+        primary_key=True, default=uuid.uuid4, editable=False)
 
     # Multi-tenant scoping (optional; may be null for unrestricted users)
     companyId = models.ForeignKey(
@@ -381,7 +438,8 @@ class QuickPurchase(Timestamp):
 
     # Prices
     unit_cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    unit_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    unit_price = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0)
 
     qty_purchased = models.PositiveIntegerField(default=0)
     qty_sold = models.PositiveIntegerField(default=0)
@@ -395,3 +453,95 @@ class QuickPurchase(Timestamp):
 
     def __str__(self):
         return f"QuickPurchase {str(self.uuid)[:8]} - {self.name} ({self.status})"
+
+
+class GoodsReceive(Timestamp):
+    """Goods receive session for a purchase order (supports partial receives)."""
+
+    STATUS_CHOICES = (
+        ("partial", "Partial"),
+        ("complete", "Complete"),
+    )
+
+    uuid = models.UUIDField(
+        primary_key=True, default=uuid.uuid4, editable=False)
+    reference_number = models.CharField(
+        max_length=30, unique=True, editable=False)
+    purchase_order = models.ForeignKey(
+        PurchaseOrder,
+        on_delete=models.CASCADE,
+        related_name="goods_receives",
+    )
+    received_by = models.CharField(max_length=150, null=True, blank=True)
+    received_date = models.DateField(default=now)
+    notes = models.TextField(null=True, blank=True)
+    status = models.CharField(
+        max_length=20, choices=STATUS_CHOICES, default="partial")
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def save(self, *args, **kwargs):
+        if not self.reference_number:
+            date_str = now().strftime("%Y%m%d")
+            last_gr = (
+                GoodsReceive.objects.filter(
+                    reference_number__startswith=f"GRN-{date_str}")
+                .order_by("-reference_number")
+                .first()
+            )
+            if last_gr:
+                last_num = int(last_gr.reference_number.split("-")[-1])
+                next_num = last_num + 1
+            else:
+                next_num = 1
+            self.reference_number = f"GRN-{date_str}-{next_num:04d}"
+        super().save(*args, **kwargs)
+
+
+def goods_receive_attachment_path(instance, filename):
+    return f"goods_receive/{instance.goods_receive_id}/{filename}"
+
+
+class GoodsReceiveAttachment(Timestamp):
+    goods_receive = models.ForeignKey(
+        GoodsReceive,
+        on_delete=models.CASCADE,
+        related_name="attachments",
+    )
+    file = models.FileField(upload_to=goods_receive_attachment_path)
+    filename = models.CharField(max_length=255, blank=True, default="")
+    uploaded_by = models.CharField(max_length=150, null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def save(self, *args, **kwargs):
+        if not self.filename and self.file:
+            self.filename = self.file.name.split("/")[-1]
+        super().save(*args, **kwargs)
+
+
+class GoodsReceiveItem(models.Model):
+    uuid = models.UUIDField(
+        primary_key=True, default=uuid.uuid4, editable=False)
+    goods_receive = models.ForeignKey(
+        GoodsReceive,
+        on_delete=models.CASCADE,
+        related_name="items",
+    )
+    purchase_order_item = models.ForeignKey(
+        PurchaseOrderItem,
+        on_delete=models.CASCADE,
+        related_name="goods_receive_items",
+    )
+    received_quantity = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0)
+    damaged_quantity = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0)
+    returned_quantity = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0)
+    remarks = models.TextField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-uuid"]
