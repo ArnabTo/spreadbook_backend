@@ -9,8 +9,16 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from inventory_log.models import InventoryLog
 
-from .models import PurchaseOrder, PurchaseOrderItem, PurchaseRequisition, QuickPurchase
+from .models import (
+    GoodsReceive,
+    GoodsReceiveItem,
+    PurchaseOrder,
+    PurchaseOrderItem,
+    PurchaseRequisition,
+    QuickPurchase,
+)
 from .serializers import (
     PurchaseOrderSerializer,
     PurchaseRequisitionSerializer,
@@ -55,14 +63,41 @@ def _get_permission_instances():
     return [IsAuthenticated()]
 
 
-def _receive_single_item_stock(po: PurchaseOrder, item, *, actor: str) -> None:
-    """Update stock for one PO item and mark it received. Call inside atomic block."""
+def _receive_single_item_stock(
+    po: PurchaseOrder,
+    item,
+    *,
+    actor: str,
+    received_qty: Decimal,
+    damaged_qty: Decimal = Decimal("0"),
+    returned_qty: Decimal = Decimal("0"),
+    remarks: str | None = None,
+) -> None:
+    """Apply a receive session for one PO item. Call inside atomic block."""
     from products.models.inventory_model import InventoryItem, StockMovement
+    from products.models.inventory_model import ProductStockMovement
     from products.models.product_model import Product
+    from .models import GoodsReceive, GoodsReceiveItem
 
-    qty = item.quantity
-    if qty is None or qty <= 0:
-        raise ValueError(f"Invalid quantity for item {item.uuid}.")
+    ordered_qty = item.ordered_quantity or item.quantity or Decimal("0")
+    if ordered_qty <= 0:
+        raise ValueError(f"Invalid ordered quantity for item {item.uuid}.")
+
+    if received_qty < 0 or damaged_qty < 0 or returned_qty < 0:
+        raise ValueError(
+            "Received/damaged/returned quantity cannot be negative.")
+
+    outstanding = max(Decimal("0"), ordered_qty -
+                      (item.received_quantity or Decimal("0")))
+    if received_qty + damaged_qty + returned_qty > outstanding:
+        raise ValueError(
+            f"Received + damaged + returned cannot exceed remaining quantity ({outstanding})."
+        )
+
+    qty = received_qty
+    if qty <= 0 and not remarks:
+        raise ValueError(
+            "Received quantity must be greater than 0 unless remarks are provided.")
 
     inventory_item_id = item.inventory_item_id
     if inventory_item_id is None and item.product_id is not None:
@@ -72,7 +107,7 @@ def _receive_single_item_stock(po: PurchaseOrder, item, *, actor: str) -> None:
             .first()
         )
 
-    if inventory_item_id is not None:
+    if inventory_item_id is not None and qty > 0:
         inv = InventoryItem.objects.select_for_update().get(pk=inventory_item_id)
         previous_stock = inv.current_stock
         inv.current_stock = inv.current_stock + qty
@@ -87,13 +122,17 @@ def _receive_single_item_stock(po: PurchaseOrder, item, *, actor: str) -> None:
             quantity=qty,
             previous_stock=previous_stock,
             new_stock=inv.current_stock,
-            reason=f"PO Receive {po.po_number}",
-            notes=po.notes or "",
+            reason="PURCHASE_RECEIVED",
+            notes=(
+                f"PO {po.po_number} receive. "
+                f"Received={qty}, Damaged={damaged_qty}, Returned={returned_qty}. "
+                f"{remarks or ''}"
+            ).strip(),
             reference_number=po.po_number,
             created_by=actor,
         )
 
-    if item.product_id is not None:
+    if item.product_id is not None and qty > 0:
         if not isinstance(qty, Decimal):
             qty = Decimal(str(qty))
 
@@ -103,6 +142,8 @@ def _receive_single_item_stock(po: PurchaseOrder, item, *, actor: str) -> None:
 
         if _is_int_decimal(base_qty):
             qty_int = int(base_qty)
+            product_obj = Product.objects.select_for_update().get(pk=item.product_id)
+            prev_stock = Decimal(str(product_obj.in_stock or 0))
             Product.objects.filter(pk=item.product_id).update(
                 quantity=F("quantity") + qty_int,
                 in_stock=F("in_stock") + qty_int,
@@ -110,32 +151,41 @@ def _receive_single_item_stock(po: PurchaseOrder, item, *, actor: str) -> None:
                 out_of_stock=False,
                 status="in stock",
             )
+            ProductStockMovement.objects.create(
+                product_id=item.product_id,
+                movement_type="in",
+                quantity=Decimal(str(qty_int)),
+                previous_stock=prev_stock,
+                new_stock=prev_stock + Decimal(str(qty_int)),
+                reason="PURCHASE_RECEIVED",
+                notes=(
+                    f"PO {po.po_number} receive. "
+                    f"Received={qty}, Damaged={damaged_qty}, Returned={returned_qty}. "
+                    f"{remarks or ''}"
+                ).strip(),
+                reference_number=po.po_number,
+                created_by=actor,
+            )
             try:
                 from products.models.inventory_model import ProductBranchInventory
 
-                product_obj = (
-                    Product.objects.filter(pk=item.product_id)
-                    .select_related("companyId")
-                    .first()
+                warehouse = po.warehouse or product_obj.warehouse
+                branch = po.branch
+                location = "in_branch" if branch else "in_warehouse"
+                pbi, _ = ProductBranchInventory.objects.get_or_create(
+                    product=product_obj,
+                    variant=item.variant if item.variant_id else None,
+                    warehouse=None if branch else warehouse,
+                    branch=branch,
+                    defaults={
+                        "companyId": product_obj.companyId,
+                        "quantity": 0,
+                        "location": location,
+                    },
                 )
-                if product_obj:
-                    warehouse = po.warehouse or product_obj.warehouse
-                    branch = po.branch
-                    location = "in_branch" if branch else "in_warehouse"
-                    pbi, _ = ProductBranchInventory.objects.get_or_create(
-                        product=product_obj,
-                        variant=item.variant if item.variant_id else None,
-                        warehouse=None if branch else warehouse,
-                        branch=branch,
-                        defaults={
-                            "companyId": product_obj.companyId,
-                            "quantity": 0,
-                            "location": location,
-                        },
-                    )
-                    ProductBranchInventory.objects.filter(pk=pbi.pk).update(
-                        quantity=F("quantity") + qty_int
-                    )
+                ProductBranchInventory.objects.filter(pk=pbi.pk).update(
+                    quantity=F("quantity") + qty_int
+                )
             except Exception as e:
                 import logging
 
@@ -146,117 +196,104 @@ def _receive_single_item_stock(po: PurchaseOrder, item, *, actor: str) -> None:
                     e,
                 )
 
-    item.item_status = "received"
-    item.save(update_fields=["item_status"])
+    item.received_quantity = (
+        item.received_quantity or Decimal("0")) + received_qty
+    item.damaged_quantity = (
+        item.damaged_quantity or Decimal("0")) + damaged_qty
+    item.returned_quantity = (
+        item.returned_quantity or Decimal("0")) + returned_qty
+    item.remaining_quantity = max(
+        Decimal("0"), ordered_qty - (item.received_quantity or Decimal("0"))
+    )
+    if item.received_quantity >= ordered_qty:
+        item.item_status = "received"
+    elif item.received_quantity > 0:
+        item.item_status = "partially_received"
+    else:
+        item.item_status = "pending"
+    if remarks:
+        item.remarks = remarks
+    item.save(
+        update_fields=[
+            "received_quantity",
+            "damaged_quantity",
+            "returned_quantity",
+            "remaining_quantity",
+            "item_status",
+            "remarks",
+        ]
+    )
+
+    session = GoodsReceive.objects.create(
+        purchase_order=po,
+        received_by=actor,
+        received_date=localdate(),
+        notes=remarks or "",
+        status="complete" if item.remaining_quantity <= 0 else "partial",
+    )
+    GoodsReceiveItem.objects.create(
+        goods_receive=session,
+        purchase_order_item=item,
+        received_quantity=received_qty,
+        damaged_quantity=damaged_qty,
+        returned_quantity=returned_qty,
+        remarks=remarks or "",
+    )
+
+    if received_qty > 0:
+        try:
+            InventoryLog.objects.create(
+                category="purchase",
+                log_type="in",
+                quantity=received_qty,
+                amount=(item.unit_price or Decimal("0")) * received_qty,
+                reference=session.reference_number or po.po_number,
+                description=(
+                    f"Goods received for PO {po.po_number}. "
+                    f"Item: {item.name}. "
+                    f"Received={received_qty}, Damaged={damaged_qty}, Returned={returned_qty}. "
+                    f"{remarks or ''}"
+                ).strip(),
+                companyId=po.companyId,
+                branch=po.branch,
+            )
+        except Exception:
+            # Inventory log should not block stock receive operations.
+            pass
+
+
+def _refresh_purchase_order_status(po: PurchaseOrder) -> None:
+    pending_count = po.items.filter(item_status="pending").count()
+    partial_count = po.items.filter(item_status="partially_received").count()
+    if pending_count == 0 and partial_count == 0:
+        po.status = "received"
+    else:
+        po.status = "waiting_for_receive"
+    po.save(update_fields=["status", "updated_at"])
 
 
 def _receive_purchase_order_in_atomic(po: PurchaseOrder, *, actor: str) -> None:
-    """Receive stock for a PO. Must be called inside an atomic block."""
+    """Receive all remaining quantities for pending/partial items in this PO."""
 
-    items = po.items.select_related("inventory_item", "product").all()
+    items = po.items.select_related(
+        "inventory_item", "product", "variant").all()
     if not items:
         raise ValueError("Purchase order has no items.")
 
-    # Import here to reduce import-time coupling.
-    from products.models.inventory_model import InventoryItem, StockMovement
-    from products.models.product_model import Product
-
     for it in items:
-        qty = it.quantity
-        if qty is None or qty <= 0:
-            raise ValueError(f"Invalid quantity for item {it.uuid}.")
+        remaining = it.remaining_quantity if it.remaining_quantity is not None else it.quantity
+        remaining = Decimal(str(remaining or 0))
+        if remaining <= 0:
+            continue
+        _receive_single_item_stock(
+            po,
+            it,
+            actor=actor,
+            received_qty=remaining,
+            remarks="Auto receive-all from PO action",
+        )
 
-        # Prefer explicit inventory_item on PO item.
-        inventory_item_id = it.inventory_item_id
-        if inventory_item_id is None and it.product_id is not None:
-            # If product is linked to an inventory item, use it.
-            inventory_item_id = (
-                Product.objects.filter(pk=it.product_id)
-                .values_list("inventory_item__id", flat=True)
-                .first()
-            )
-
-        if inventory_item_id is not None:
-            inv = InventoryItem.objects.select_for_update().get(pk=inventory_item_id)
-            previous_stock = inv.current_stock
-            inv.current_stock = inv.current_stock + qty
-            # Optional metadata from PO line.
-            if it.expiry_date is not None:
-                inv.expiry_date = it.expiry_date
-            if it.warranty_expiry_date is not None:
-                inv.warranty_expiry_date = it.warranty_expiry_date
-            inv.save()
-
-            StockMovement.objects.create(
-                inventory_item=inv,
-                movement_type="in",
-                quantity=qty,
-                previous_stock=previous_stock,
-                new_stock=inv.current_stock,
-                reason=f"PO Receive {po.po_number}",
-                notes=po.notes or "",
-                reference_number=po.po_number,
-                created_by=actor,
-            )
-
-        # Legacy product stock update for POS products (int-only)
-        if it.product_id is not None:
-            if not isinstance(qty, Decimal):
-                qty = Decimal(str(qty))
-
-            # Convert buying-unit quantity to base-stock quantity before updating stock.
-            buying_factor = _get_buying_unit_factor(it.product_id)
-            base_qty = qty * buying_factor
-
-            if _is_int_decimal(base_qty):
-                qty_int = int(base_qty)
-                Product.objects.filter(pk=it.product_id).update(
-                    quantity=F("quantity") + qty_int,
-                    in_stock=F("in_stock") + qty_int,
-                    totalPurchase=F("totalPurchase") + qty_int,
-                    out_of_stock=False,
-                    status="in stock",
-                )
-
-                # Update ProductBranchInventory (single source of truth for branch/warehouse stock)
-                try:
-                    from products.models.inventory_model import ProductBranchInventory
-
-                    product_obj = (
-                        Product.objects.filter(pk=it.product_id)
-                        .select_related("companyId")
-                        .first()
-                    )
-                    if product_obj:
-                        warehouse = po.warehouse or product_obj.warehouse
-                        branch = po.branch
-                        location = "in_branch" if branch else "in_warehouse"
-                        pbi, _ = ProductBranchInventory.objects.get_or_create(
-                            product=product_obj,
-                            variant=it.variant if it.variant_id else None,
-                            warehouse=None if branch else warehouse,
-                            branch=branch,
-                            defaults={
-                                "companyId": product_obj.companyId,
-                                "quantity": 0,
-                                "location": location,
-                            },
-                        )
-                        ProductBranchInventory.objects.filter(pk=pbi.pk).update(
-                            quantity=F("quantity") + qty_int
-                        )
-                except Exception as e:
-                    import logging
-
-                    logging.getLogger(__name__).warning(
-                        "ProductBranchInventory update failed for product %s during PO %s receive: %s",
-                        it.product_id,
-                        po.po_number,
-                        e,
-                    )
-
-    po.status = "delivered"
-    po.save(update_fields=["status", "updated_at"])
+    _refresh_purchase_order_status(po)
 
     if po.requisition_id and po.requisition.status == "approved":
         po.requisition.status = "converted"
@@ -409,7 +446,8 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        items = requisition.items.select_related("product", "inventory_item").all()
+        items = requisition.items.select_related(
+            "product", "inventory_item").all()
         if not items:
             return Response(
                 {"detail": "Requisition has no items."},
@@ -480,7 +518,7 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
                 po = PurchaseOrder.objects.create(
                     requisition=requisition,
                     supplier=None,
-                    status="delivered",
+                    status="received",
                     notes=f"Auto-created from {requisition.pr_number}",
                     created_by=actor,
                 )
@@ -531,7 +569,8 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
                     _receive_purchase_order_in_atomic(po, actor=actor)
                 except Exception as exc:
                     return Response(
-                        {"detail": str(exc) or "Failed to receive purchase order."},
+                        {"detail": str(
+                            exc) or "Failed to receive purchase order."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
@@ -574,9 +613,9 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
     def cancel(self, request, *args, **kwargs):
         """Cancel a purchase order."""
         po: PurchaseOrder = self.get_object()
-        if po.status == "delivered":
+        if po.status == "received":
             return Response(
-                {"detail": "Delivered purchase orders cannot be cancelled."},
+                {"detail": "Received purchase orders cannot be cancelled."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         po.status = "cancelled"
@@ -693,7 +732,8 @@ class QuickPurchaseViewSet(viewsets.ModelViewSet):
                     else None
                 ),
                 sku=(
-                    str(sku).strip() if sku is not None and str(sku).strip() else None
+                    str(sku).strip() if sku is not None and str(
+                        sku).strip() else None
                 ),
                 price=float(qp.unit_price or 0),
                 in_stock=remaining,
@@ -785,7 +825,8 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                     if branch_id and str(branch_id) not in {
                         str(bid) for bid in allowed_branch_ids
                     }:
-                        raise PermissionDenied("You do not have access to this branch")
+                        raise PermissionDenied(
+                            "You do not have access to this branch")
                     qs = qs.filter(branch_id__in=allowed_branch_ids)
                 elif getattr(user, "companyId_id", None):
                     qs = qs.filter(companyId_id=user.companyId_id)
@@ -837,7 +878,8 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                 if allowed_branch_ids and str(branch_id) not in {
                     str(bid) for bid in allowed_branch_ids
                 }:
-                    raise PermissionDenied("You do not have access to this branch")
+                    raise PermissionDenied(
+                        "You do not have access to this branch")
 
             # Auto-assign company from user if not provided
             if not company_id and getattr(self.request.user, "companyId_id", None):
@@ -855,7 +897,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
     def update(self, request, *args, **kwargs):
         po: PurchaseOrder = self.get_object()
-        if po.status in {"delivered", "cancelled"}:
+        if po.status in {"received", "cancelled"}:
             return Response(
                 {
                     "detail": f"{po.status.capitalize()} purchase orders cannot be edited."
@@ -866,9 +908,9 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         po: PurchaseOrder = self.get_object()
-        if po.status == "delivered":
+        if po.status == "received":
             return Response(
-                {"detail": "Delivered purchase orders cannot be deleted."},
+                {"detail": "Received purchase orders cannot be deleted."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return super().destroy(request, *args, **kwargs)
@@ -909,15 +951,15 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
     def receive(self, request, *args, **kwargs):
         """Receive stock for this PO (atomic).
 
-        - Marks PO as delivered
+        - Marks PO as received when all items are fully received
         - Updates linked InventoryItem stock (+quantity)
         - Writes StockMovement entries for audit
         """
 
         po: PurchaseOrder = self.get_object()
-        if po.status == "delivered":
+        if po.status == "received":
             return Response(
-                {"detail": "Purchase order is already delivered."},
+                {"detail": "Purchase order is already received."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if po.status == "cancelled":
@@ -937,7 +979,8 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                 _receive_purchase_order_in_atomic(po, actor=actor)
             except Exception as exc:
                 return Response(
-                    {"detail": str(exc) or "Failed to receive purchase order."},
+                    {"detail": str(
+                        exc) or "Failed to receive purchase order."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
@@ -1042,10 +1085,12 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
         # Verify item belongs to this PO — direct FK or product/variant match
         product_ids = set(
-            po.items.exclude(product__isnull=True).values_list("product_id", flat=True)
+            po.items.exclude(product__isnull=True).values_list(
+                "product_id", flat=True)
         )
         variant_ids = set(
-            po.items.exclude(variant__isnull=True).values_list("variant_id", flat=True)
+            po.items.exclude(variant__isnull=True).values_list(
+                "variant_id", flat=True)
         )
         belongs = (
             item.purchase_order_id == po.uuid
@@ -1074,7 +1119,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         po_completed = total > 0 and pending_count == 0
 
         if po_completed:
-            po.status = "delivered"
+            po.status = "received"
             po.save(update_fields=["status", "updated_at"])
 
         return Response(
@@ -1101,10 +1146,12 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
             )
 
         product_ids = set(
-            po.items.exclude(product__isnull=True).values_list("product_id", flat=True)
+            po.items.exclude(product__isnull=True).values_list(
+                "product_id", flat=True)
         )
         variant_ids = set(
-            po.items.exclude(variant__isnull=True).values_list("variant_id", flat=True)
+            po.items.exclude(variant__isnull=True).values_list(
+                "variant_id", flat=True)
         )
 
         scope_qs = ProductSerialItem.objects.filter(
@@ -1119,7 +1166,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
             purchase_order=po,
         )
 
-        po.status = "delivered"
+        po.status = "received"
         po.save(update_fields=["status", "updated_at"])
 
         return Response(
@@ -1203,7 +1250,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
     def receive_item_action(self, request, *args, **kwargs):
         """Receive a single PO item by uuid. Auto-sets PO status to received when all done."""
         po: PurchaseOrder = self.get_object()
-        if po.status not in {"approved", "waiting_for_receive"}:
+        if po.status not in {"approved", "waiting_for_receive", "received"}:
             return Response(
                 {
                     "detail": "Purchase order must be approved or waiting for receive to receive items."
@@ -1240,23 +1287,41 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
             else "Anonymous"
         )
         remarks = (request.data.get("remarks") or "").strip() or None
+        received_qty_raw = request.data.get("received_quantity")
+        damaged_qty_raw = request.data.get("damaged_quantity")
+        returned_qty_raw = request.data.get("returned_quantity")
+
+        try:
+            received_qty = (
+                Decimal(str(received_qty_raw))
+                if received_qty_raw is not None
+                else Decimal(str(item.remaining_quantity or item.quantity or 0))
+            )
+            damaged_qty = Decimal(str(damaged_qty_raw or 0))
+            returned_qty = Decimal(str(returned_qty_raw or 0))
+        except Exception:
+            return Response(
+                {"detail": "Invalid quantity values provided."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         with transaction.atomic():
             try:
-                _receive_single_item_stock(po, item, actor=actor)
+                _receive_single_item_stock(
+                    po,
+                    item,
+                    actor=actor,
+                    received_qty=received_qty,
+                    damaged_qty=damaged_qty,
+                    returned_qty=returned_qty,
+                    remarks=remarks,
+                )
             except Exception as exc:
                 return Response(
                     {"detail": str(exc) or "Failed to receive item."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            if remarks:
-                item.remarks = remarks
-                item.save(update_fields=["remarks"])
-
-            all_received = not po.items.filter(item_status="pending").exists()
-            if all_received:
-                po.status = "received"
-                po.save(update_fields=["status", "updated_at"])
+            _refresh_purchase_order_status(po)
 
         po.refresh_from_db()
         return Response(self.get_serializer(po).data, status=status.HTTP_200_OK)
@@ -1265,7 +1330,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
     def receive_all_items_action(self, request, *args, **kwargs):
         """Receive all pending items for this PO at once."""
         po: PurchaseOrder = self.get_object()
-        if po.status not in {"approved", "waiting_for_receive"}:
+        if po.status not in {"approved", "waiting_for_receive", "received"}:
             return Response(
                 {
                     "detail": "Purchase order must be approved or waiting for receive to receive items."
@@ -1274,7 +1339,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
             )
 
         pending_items = list(
-            po.items.filter(item_status="pending").select_related(
+            po.items.filter(item_status__in=["pending", "partially_received"]).select_related(
                 "inventory_item", "product", "variant"
             )
         )
@@ -1293,19 +1358,26 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         with transaction.atomic():
             for item in pending_items:
                 try:
-                    _receive_single_item_stock(po, item, actor=actor)
+                    _receive_single_item_stock(
+                        po,
+                        item,
+                        actor=actor,
+                        received_qty=Decimal(
+                            str(item.remaining_quantity or item.quantity or 0)),
+                        remarks="Bulk receive all pending quantities",
+                    )
                 except Exception as exc:
                     return Response(
                         {"detail": str(exc) or "Failed to receive items."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
-            po.status = "received"
-            po.save(update_fields=["status", "updated_at"])
+            _refresh_purchase_order_status(po)
             if po.requisition_id:
                 try:
                     if po.requisition.status == "approved":
                         po.requisition.status = "converted"
-                        po.requisition.save(update_fields=["status", "updated_at"])
+                        po.requisition.save(
+                            update_fields=["status", "updated_at"])
                 except Exception:
                     pass
 
@@ -1333,7 +1405,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                 "approved": status_map.get("approved", 0),
                 "waiting_for_receive": status_map.get("waiting_for_receive", 0),
                 "received": status_map.get("received", 0),
-                "delivered": status_map.get("delivered", 0),
+                "delivered": 0,
                 "cancelled": status_map.get("cancelled", 0),
                 "total_amount": total_amount,
                 "paid_count": paid_count,
