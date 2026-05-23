@@ -24,8 +24,7 @@ _env_name = (
 )
 
 _env_name = _env_name.strip().lower()
-ENVIRONMENT = "production" if _env_name in {
-    "production", "prod"} else "development"
+ENVIRONMENT = "production" if _env_name in {"production", "prod"} else "development"
 IS_PRODUCTION = ENVIRONMENT == "production"
 
 
@@ -82,8 +81,7 @@ DEBUG = _env_bool(
 
 # Dev/demo mode: disable authentication/permissions entirely.
 # IMPORTANT: Do not enable this in production.
-DJANGO_DISABLE_AUTH = _env_bool(
-    os.getenv("DJANGO_DISABLE_AUTH"), default=False)
+DJANGO_DISABLE_AUTH = _env_bool(os.getenv("DJANGO_DISABLE_AUTH"), default=False)
 
 # SECURITY WARNING: keep the secret key used in production secret!
 _secret_key_env = os.getenv("DJANGO_SECRET_KEY") or os.getenv("SECRET_KEY")
@@ -160,8 +158,7 @@ if IS_PRODUCTION and not ALLOWED_HOSTS:
 # POS configuration
 # Maximum allowed cash short waiver for cash payments (in currency units, e.g., BDT).
 # Example: POS_CASH_WAIVER_MAX=10
-POS_CASH_WAIVER_MAX = _env_decimal(
-    os.getenv("POS_CASH_WAIVER_MAX"), default="10")
+POS_CASH_WAIVER_MAX = _env_decimal(os.getenv("POS_CASH_WAIVER_MAX"), default="10")
 
 # Additional security headers/policies
 SECURE_CROSS_ORIGIN_OPENER_POLICY = (
@@ -203,8 +200,7 @@ _default_cors = (
 CORS_ALLOWED_ORIGINS = _env_csv(
     os.getenv("DJANGO_CORS_ALLOWED_ORIGINS"), default=_default_cors
 )
-CSRF_TRUSTED_ORIGINS = _env_csv(
-    os.getenv("DJANGO_CSRF_TRUSTED_ORIGINS"), default=[])
+CSRF_TRUSTED_ORIGINS = _env_csv(os.getenv("DJANGO_CSRF_TRUSTED_ORIGINS"), default=[])
 
 # Convenience: In production, if CSRF trusted origins aren't explicitly provided,
 # default them from the CORS allowed origins.
@@ -430,6 +426,18 @@ if _database_url:
             ),
         )
     }
+elif IS_PRODUCTION:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": "hellobiz_pos",
+            "USER": "hellobiz",
+            "PASSWORD": "helloBIZ@Raktch1997#",
+            "HOST": "localhost",
+            "PORT": "5432",
+            "CONN_MAX_AGE": 60,
+        }
+    }
 else:
     DATABASES = {
         "default": {
@@ -490,8 +498,7 @@ EMAIL_HOST_USER = os.getenv("DJANGO_EMAIL_HOST_USER") or ""
 EMAIL_HOST_PASSWORD = os.getenv("DJANGO_EMAIL_HOST_PASSWORD") or ""
 EMAIL_USE_TLS = _env_bool(os.getenv("DJANGO_EMAIL_USE_TLS"), default=True)
 DEFAULT_FROM_EMAIL = (
-    os.getenv(
-        "DJANGO_DEFAULT_FROM_EMAIL") or EMAIL_HOST_USER or "rakibulto@gmail.com"
+    os.getenv("DJANGO_DEFAULT_FROM_EMAIL") or EMAIL_HOST_USER or "rakibulto@gmail.com"
 )
 
 # Used for error emails (if you enable them) and server-side notifications.
@@ -511,8 +518,11 @@ DJANGO_CACHE_TIMEOUT = int(os.getenv("DJANGO_CACHE_TIMEOUT") or 300)
 # django-defender requires a Redis URL; fall back to a local Redis default so
 # the middleware module can be imported even when DEFENDER_REDIS_URL is not set.
 # Set DEFENDER_REDIS_URL env-var to override in production.
-DEFENDER_REDIS_URL = os.getenv("DEFENDER_REDIS_URL") or os.getenv(
-    "DJANGO_REDIS_URL") or "redis://127.0.0.1:6379/0"
+DEFENDER_REDIS_URL = (
+    os.getenv("DEFENDER_REDIS_URL")
+    or os.getenv("DJANGO_REDIS_URL")
+    or "redis://127.0.0.1:6379/0"
+)
 
 if DJANGO_REDIS_URL:
     CACHES = {
