@@ -415,39 +415,65 @@ WSGI_APPLICATION = "ERP_Shop.wsgi.application"
 # Database
 # https://docs.djangoproject.com/en/4.1/ref/settings/#databases
 
-_database_url = os.getenv("DATABASE_URL") or os.getenv("DJANGO_DATABASE_URL")
-if _database_url:
-    DATABASES = {
-        "default": dj_database_url.config(
-            default=_database_url,
-            conn_max_age=int(os.getenv("DJANGO_DB_CONN_MAX_AGE") or 60),
-            ssl_require=_env_bool(
-                os.getenv("DJANGO_DB_SSL_REQUIRE"), default=not DEBUG
-            ),
-        )
+# _database_url = os.getenv("DATABASE_URL") or os.getenv("DJANGO_DATABASE_URL")
+# if _database_url:
+#     DATABASES = {
+#         "default": dj_database_url.config(
+#             default=_database_url,
+#             conn_max_age=int(os.getenv("DJANGO_DB_CONN_MAX_AGE") or 60),
+#             ssl_require=_env_bool(
+#                 os.getenv("DJANGO_DB_SSL_REQUIRE"), default=not DEBUG
+#             ),
+#         )
+#     }
+# elif IS_PRODUCTION:
+#     DATABASES = {
+#         "default": {
+#             "ENGINE": "django.db.backends.postgresql",
+#             "NAME": "hellobiz_pos",
+#             "USER": "hellobiz",
+#             "PASSWORD": "helloBIZ@Raktch1997#",
+#             "HOST": "localhost",
+#             "PORT": "5432",
+#             "CONN_MAX_AGE": 60,
+#         }
+#     }
+# else:
+#     DATABASES = {
+#         "default": {
+#             "ENGINE": "django.db.backends.sqlite3",
+#             "NAME": BASE_DIR / "db.sqlite3",
+#             "OPTIONS": {
+#                 "timeout": 20,
+#             },
+#         }
+#     }
+
+
+
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": "hellobiz_pos",
+        "USER": "hellobiz",
+        "PASSWORD": "helloBIZ@Raktch1997#",
+        "HOST": "localhost",
+        "PORT": "5432",
+        "CONN_MAX_AGE": 60,
     }
-elif IS_PRODUCTION:
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.postgresql",
-            "NAME": "hellobiz_pos",
-            "USER": "hellobiz",
-            "PASSWORD": "helloBIZ@Raktch1997#",
-            "HOST": "localhost",
-            "PORT": "5432",
-            "CONN_MAX_AGE": 60,
-        }
-    }
-else:
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "db.sqlite3",
-            "OPTIONS": {
-                "timeout": 20,
-            },
-        }
-    }
+}
+
+# Local development fallback (uncomment when working locally):
+# DATABASES = {
+#     "default": {
+#         "ENGINE": "django.db.backends.sqlite3",
+#         "NAME": BASE_DIR / "db.sqlite3",
+#         "OPTIONS": {
+#             "timeout": 20,
+#         },
+#     }
+# }
+
 
 ##################
 # AUTHENTICATION #
