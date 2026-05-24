@@ -173,6 +173,23 @@ def pos_sales_summary(request):
             }
         )
 
+    sold_items_qs = (
+        InvoiceItem.objects.filter(sell_invoice__in=scoped_qs)
+        .values("title")
+        .annotate(total_qty=Sum("quantity"), total_revenue=Sum("total"))
+        .order_by("-total_qty", "title")
+    )
+    sold_items = []
+    for row in sold_items_qs:
+        total_qty = float(row.get("total_qty") or 0)
+        sold_items.append(
+            {
+                "name": row.get("title") or "Unknown Item",
+                "count": int(round(total_qty)),
+                "revenue": float(row.get("total_revenue") or 0),
+            }
+        )
+
     return Response(
         {
             "success": True,
@@ -188,6 +205,7 @@ def pos_sales_summary(request):
                 "payment_breakdown": payment_breakdown,
                 "daily_trend": daily_trend,
                 "recent_sales": recent_sales,
+                "sold_items": sold_items,
             },
         },
         status=status.HTTP_200_OK,
