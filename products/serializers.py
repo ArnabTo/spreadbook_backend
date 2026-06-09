@@ -127,13 +127,20 @@ class SaleLavelUpdateSerializer(serializers.ModelSerializer):
 
 
 class CategorySerializer(serializers.ModelSerializer):
+    parent_name = serializers.CharField(source="parent.name", read_only=True, default=None)
+    parentId = serializers.PrimaryKeyRelatedField(
+        source="parent",
+        queryset=Category.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+    )
+
     class Meta:
         model = Category
         fields = "__all__"
         read_only_fields = ("id", "companyId", "created_at", "updated_at")
 
     def create(self, validated_data):
-        """Auto-assign companyId from request context"""
         if "companyId" not in validated_data:
             request = self.context.get("request")
             if request and hasattr(request, "user") and request.user.is_authenticated:
@@ -143,7 +150,6 @@ class CategorySerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         return super().update(instance, validated_data)
-
 
 class PictureSerializer(serializers.ModelSerializer):
     class Meta:

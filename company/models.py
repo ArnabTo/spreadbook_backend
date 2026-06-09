@@ -37,7 +37,6 @@ class Company(models.Model):
     postedAt = models.DateTimeField(default=now, blank=True, null=True)
     updateAt = models.DateTimeField(auto_now=True)
 
-    # Additional fields to match frontend interface
     logo = models.ImageField(upload_to=upload_to, blank=True, null=True)
     ownerName = models.CharField(
         max_length=200, null=True, blank=True, help_text="Company owner name"
@@ -253,19 +252,33 @@ class Company(models.Model):
         max_length=200,
         blank=True,
         null=True,
-        help_text="First subtitle line for receipt header (e.g., 'MEN'S . WOMEN'S . KIDS')",
+        help_text="First subtitle line for receipt header",
     )
     company_title_line2 = models.CharField(
         max_length=200,
         blank=True,
         null=True,
-        help_text="Second subtitle line for receipt header (e.g., 'A Concern of Khan Revive Group')",
+        help_text="Second subtitle line for receipt header",
     )
     company_website = models.CharField(
         max_length=200,
         blank=True,
         null=True,
-        help_text="Company website for receipt header (e.g., 'aramun.com.bd')",
+        help_text="Company website for receipt header",
+    )
+
+    # Saudi-specific - bilingual Commercial Registration number
+    cr_number_en = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        help_text="Commercial Registration Number (English)",
+    )
+    cr_number_ar = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        help_text="رقم السجل التجاري (Arabic)",
     )
 
     class Meta:
@@ -278,7 +291,6 @@ class Company(models.Model):
 
     @staticmethod
     def _base_company_code(name):
-        """Build a short alphanumeric base code from company name."""
         normalized = slugify(name or "").upper().replace("-", "")
         if not normalized:
             return "CMP"
@@ -301,18 +313,14 @@ class Company(models.Model):
 
     @property
     def branch_count(self):
-        """Get number of branches for this company"""
         return self.company_branches.filter(is_active=True).count()
 
     @property
     def branches(self):
-        """Get stored branch count for API compatibility"""
         return self.branch_count_field or 0
 
 
 class Branch(models.Model):
-    """Shop branch model for multi-location management"""
-
     company = models.ForeignKey(
         Company,
         on_delete=models.CASCADE,
@@ -325,23 +333,21 @@ class Branch(models.Model):
         blank=True,
         null=True,
         related_name="warehouse_branches",
-        help_text="Warehouse this branch belongs to (company => warehouse => branch)",
+        help_text="Warehouse this branch belongs to",
     )
     name = models.CharField(
-        max_length=100, help_text="Branch name (e.g., Downtown Branch, Mall Location)"
+        max_length=100, help_text="Branch name"
     )
     code = models.CharField(
-        max_length=20, unique=True, help_text="Unique branch code (e.g., DT001, ML002)"
+        max_length=20, unique=True, help_text="Unique branch code"
     )
 
-    # Contact Information
     phoneNumber = models.CharField(max_length=20, blank=True, null=True)
     phone = models.CharField(
         max_length=20, blank=True, null=True, help_text="Alternative phone field"
     )
     email = models.EmailField(blank=True, null=True)
 
-    # Address Information
     fullAddress = models.CharField(max_length=200, help_text="Street address")
     location = models.CharField(
         max_length=200, blank=True, null=True, help_text="Frontend location field"
@@ -351,7 +357,6 @@ class Branch(models.Model):
     country = models.CharField(max_length=100, default="Bangladesh")
     postal_code = models.CharField(max_length=20, blank=True, null=True)
 
-    # Management
     manager = models.ForeignKey(
         User,
         on_delete=models.SET_NULL,
@@ -367,11 +372,10 @@ class Branch(models.Model):
         help_text="Manager name (for frontend compatibility)",
     )
 
-    # Restaurant Specific Details
     opening_hours = models.JSONField(
         default=dict,
         blank=True,
-        help_text="Opening hours for each day (e.g., {'monday': '9:00-22:00'})",
+        help_text="Opening hours for each day",
     )
     openingHours = models.CharField(
         max_length=100,
@@ -386,7 +390,6 @@ class Branch(models.Model):
         default=0.0, help_text="Delivery radius in kilometers"
     )
 
-    # Sales and Operational Data (for dashboard metrics)
     todaySales = models.DecimalField(
         max_digits=10, decimal_places=2, default=0.00, help_text="Today's sales amount"
     )
@@ -401,7 +404,6 @@ class Branch(models.Model):
     )
     staff = models.PositiveIntegerField(default=0, help_text="Number of staff members")
 
-    # Status
     status = models.CharField(
         max_length=20,
         choices=[
@@ -426,7 +428,6 @@ class Branch(models.Model):
 
     @property
     def full_address(self):
-        """Get formatted full address"""
         address_parts = [self.fullAddress]
         if self.city:
             address_parts.append(self.city)
@@ -439,25 +440,20 @@ class Branch(models.Model):
 
     @property
     def user_count(self):
-        """Get number of users assigned to this branch"""
         try:
             from utils.sqlite_compat import filter_users_by_branch_access
-
             users = filter_users_by_branch_access(
                 User.objects, [self.id], check_active=True
             )
             return len(users) if isinstance(users, list) else users.count()
         except Exception:
-            # Fallback to 0 if there's any error
             return 0
 
     @property
     def companyId(self):
-        """Get company ID as string for frontend compatibility"""
         return str(self.company.id) if self.company else None
 
     def save(self, *args, **kwargs):
-        # Auto-generate code if not provided
         if not self.code and self.company:
             company_prefix = "".join(
                 char
@@ -484,21 +480,17 @@ class Branch(models.Model):
                     break
                 branch_count += 1
 
-        # Sync status fields
         if self.is_active:
             self.status = "active"
         else:
             self.status = "inactive"
 
-        # Auto-populate location from fullAddress if not provided
         if not self.location and self.fullAddress:
             self.location = self.fullAddress
 
-        # Auto-populate manager_name from manager if not provided
         if not self.manager_name and self.manager:
             self.manager_name = self.manager.get_full_name() or self.manager.username
 
-        # Auto-populate phone from phoneNumber if not provided
         if not self.phone and self.phoneNumber:
             self.phone = self.phoneNumber
 
@@ -506,8 +498,6 @@ class Branch(models.Model):
 
 
 class Warehouse(models.Model):
-    """Warehouse model for multi-level management: Company => Warehouse => Branch"""
-
     company = models.ForeignKey(
         Company,
         on_delete=models.CASCADE,
@@ -520,26 +510,23 @@ class Warehouse(models.Model):
         blank=True,
         null=True,
         related_name="child_warehouses",
-        help_text="Parent warehouse (for warehouse-to-warehouse connections)",
+        help_text="Parent warehouse",
     )
 
     name = models.CharField(max_length=100, help_text="Warehouse name")
     code = models.CharField(
-        max_length=20, unique=True, help_text="Unique warehouse code (e.g., WH001)"
+        max_length=20, unique=True, help_text="Unique warehouse code"
     )
 
-    # Contact Information
     phoneNumber = models.CharField(max_length=20, blank=True, null=True)
     email = models.EmailField(blank=True, null=True)
 
-    # Address Information
     fullAddress = models.CharField(max_length=200, blank=True, null=True)
     city = models.CharField(max_length=100, blank=True, null=True)
     state = models.CharField(max_length=100, blank=True, null=True)
     country = models.CharField(max_length=100, default="Bangladesh")
     postal_code = models.CharField(max_length=20, blank=True, null=True)
 
-    # Management
     manager = models.ForeignKey(
         User,
         on_delete=models.SET_NULL,
@@ -555,7 +542,6 @@ class Warehouse(models.Model):
         help_text="Manager name (for frontend compatibility)",
     )
 
-    # Warehouse specifics
     capacity = models.PositiveIntegerField(
         default=0, help_text="Total storage capacity (units)"
     )
@@ -572,7 +558,6 @@ class Warehouse(models.Model):
         help_text="Type of warehouse",
     )
 
-    # Status
     is_active = models.BooleanField(default=True)
     status = models.CharField(
         max_length=20,
@@ -594,30 +579,24 @@ class Warehouse(models.Model):
 
     @property
     def companyId(self):
-        """Get company ID as string for frontend compatibility"""
         return str(self.company.id) if self.company else None
 
     @property
     def branch_count(self):
-        """Get number of branches connected to this warehouse"""
         return self.warehouse_branches.filter(is_active=True).count()
 
     def save(self, *args, **kwargs):
-        # Auto-generate code if not provided
         if not self.code and self.company:
             company_prefix = (self.company.name or "WH")[:2].upper()
             wh_count = Warehouse.objects.filter(company=self.company).count() + 1
             self.code = f"WH{company_prefix}{wh_count:03d}"
 
-        # Sync status fields
         self.status = "active" if self.is_active else "inactive"
 
         super().save(*args, **kwargs)
 
 
 class CompanyCustomization(models.Model):
-    """Customization settings for companies"""
-
     company = models.OneToOneField(
         Company,
         on_delete=models.CASCADE,
@@ -628,13 +607,13 @@ class CompanyCustomization(models.Model):
         max_length=7,
         null=True,
         blank=True,
-        help_text="Primary color in hex format (e.g., #8B4513)",
+        help_text="Primary color in hex format",
     )
     currency = models.CharField(
         max_length=3,
         null=True,
         blank=True,
-        help_text="Currency code (e.g., USD, EUR, GBP)",
+        help_text="Currency code",
     )
     taxRate = models.DecimalField(
         max_digits=5,
@@ -647,19 +626,15 @@ class CompanyCustomization(models.Model):
         max_length=100,
         null=True,
         blank=True,
-        help_text="Timezone (e.g., America/New_York)",
+        help_text="Timezone",
     )
-
-    # Pharmacy / prescription workflow
     enforce_prescriptions = models.BooleanField(
         default=False,
-        help_text=(
-            "If enabled, prescription-required products cannot be sold unless an approved prescription is attached."
-        ),
+        help_text="If enabled, prescription-required products require approved prescription",
     )
     enforce_controlled_substances = models.BooleanField(
         default=False,
-        help_text="If enabled, controlled substances additionally require an approved prescription.",
+        help_text="If enabled, controlled substances require approved prescription",
     )
 
     created_at = models.DateTimeField(default=now, editable=False)
