@@ -1,6 +1,8 @@
 from django.urls import path
 from rest_framework import routers
 from .api import (
+    CountryViewSet,
+    StateProvinceViewSet,
     CompanyViewSet,
     BranchViewSet,
     CompanyCustomizationViewSet,
@@ -21,6 +23,8 @@ router = routers.DefaultRouter()
 router.register("api/companies", CompanyViewSet, "companies")
 router.register("api/branches", BranchViewSet, "branches")
 router.register("api/warehouses", WarehouseViewSet, "warehouses")
+router.register("api/countries", CountryViewSet, "countries")
+router.register("api/states", StateProvinceViewSet, "states")
 router.register(
     "api/company-customizations", CompanyCustomizationViewSet, "company-customizations"
 )

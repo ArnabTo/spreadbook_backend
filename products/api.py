@@ -145,7 +145,7 @@ class ProductOptionsView(APIView):
 
 
 class UnitViewSet(viewsets.ModelViewSet):
-    """CRUD for Unit.  Used by the frontend Add-Product form to create missing units."""
+    """CRUD for Unit with parent-child unit support."""
 
     serializer_class = UnitSerializer
     http_method_names = ["get", "post", "patch", "put", "delete", "head", "options"]
@@ -186,7 +186,7 @@ class UnitViewSet(viewsets.ModelViewSet):
         raise serializers.ValidationError("company_id is required")
 
     def get_queryset(self):
-        qs = Unit.objects.all()
+        qs = Unit.objects.select_related("parent").all()
         requested_company_id = self._requested_company_id()
         user = self.request.user
 
@@ -207,23 +207,12 @@ class UnitViewSet(viewsets.ModelViewSet):
 
         return qs.order_by("name")
 
-    def create(self, request, *args, **kwargs):
-        # Normalise name: strip whitespace, reject blank.
-        name = (request.data.get("name") or "").strip()
-        if not name:
-            return Response(
-                {"name": ["Unit name is required."]}, status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Return existing unit if name already taken (case-insensitive), so the
-        # frontend can simply auto-select it without special-casing duplicates.
+    def perform_create(self, serializer):
         company = self._resolve_company_for_write()
-        existing = Unit.objects.filter(companyId=company, name__iexact=name).first()
-        if existing:
-            return Response(UnitSerializer(existing).data, status=status.HTTP_200_OK)
+        serializer.save(companyId=company, status=True)
 
-        unit = Unit.objects.create(companyId=company, name=name, status=True)
-        return Response(UnitSerializer(unit).data, status=status.HTTP_201_CREATED)
+    def perform_update(self, serializer):
+        serializer.save()
 
 
 class UnitConversionGroupViewSet(viewsets.ModelViewSet):
@@ -576,7 +565,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         "code",
         "brand_name",
         "manufacturer",
-        "category",
+        "category", "arabic_name", "hsn_code",
     ]
     ordering_fields = [
         "name",
@@ -924,6 +913,17 @@ class ProductViewSet(viewsets.ModelViewSet):
                 "supplier",
                 "condition",
                 "refundable",
+                "arabic_name",
+                "is_tax_applied",
+                "tax_rate",
+                "min_sales_rate",
+                "is_active",
+                "is_multiple_unit_enabled",
+                "remarks",
+                "rm_element_used",
+                "hsn_code",
+                "avg_qty",
+                "unit_prices",
             }
             catalog_data = {
                 k: v for k, v in request.data.items() if k in catalog_allowed
@@ -1007,6 +1007,17 @@ class ProductViewSet(viewsets.ModelViewSet):
                 "supplier",
                 "condition",
                 "refundable",
+                "arabic_name",
+                "is_tax_applied",
+                "tax_rate",
+                "min_sales_rate",
+                "is_active",
+                "is_multiple_unit_enabled",
+                "remarks",
+                "rm_element_used",
+                "hsn_code",
+                "avg_qty",
+                "unit_prices",
             }
             catalog_data = {
                 k: v for k, v in request.data.items() if k in catalog_allowed

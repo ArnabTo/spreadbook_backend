@@ -1,7 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework import serializers
-from .models import Company, Branch, CompanyCustomization, Warehouse
+from .models import Company, Branch, CompanyCustomization, Warehouse, Country, StateProvince
 
 User = get_user_model()
 
@@ -481,3 +481,50 @@ class CompanyListSerializer(serializers.ModelSerializer):
             "features",
             "customization",
         ]
+
+
+class CountrySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Country
+        fields = ["id", "name", "arabic_name", "is_active"]
+
+
+class StateProvinceSerializer(serializers.ModelSerializer):
+    country_name = serializers.CharField(source="country.name", read_only=True)
+
+    class Meta:
+        model = StateProvince
+        fields = ["id", "country", "country_name", "name", "arabic_name", "is_active"]
+
+
+class WarehouseDetailSerializer(serializers.ModelSerializer):
+    country_name = serializers.CharField(source="country_ref.name", read_only=True, default=None)
+    state_name = serializers.CharField(source="state_ref.name", read_only=True, default=None)
+    company_name = serializers.CharField(source="company.name", read_only=True, default=None)
+
+    class Meta:
+        model = Warehouse
+        fields = [
+            "id", "company", "company_name", "parent_warehouse", "name", "code",
+            "phoneNumber", "email", "fullAddress",
+            "city", "state", "country", "postal_code",
+            "country_ref", "country_name", "state_ref", "state_name",
+            "arabic_country", "arabic_state", "arabic_city",
+            "arabic_building_no", "arabic_street_name", "arabic_district",
+            "arabic_additional_no", "arabic_zip_code",
+            "building_no", "street_name", "district", "additional_no",
+            "manager", "manager_name", "capacity", "warehouseType",
+            "is_active", "status", "postedAt", "updateAt",
+        ]
+        read_only_fields = ("id", "company", "postedAt", "updateAt")
+        extra_kwargs = {
+            "code": {"required": False, "allow_blank": True},
+            "name": {"required": False, "allow_blank": True},
+        }
+
+    def create(self, validated_data):
+        request = self.context.get("request")
+        if request and hasattr(request, "user") and request.user.is_authenticated:
+            if hasattr(request.user, "companyId") and request.user.companyId:
+                validated_data["company"] = request.user.companyId
+        return super().create(validated_data)

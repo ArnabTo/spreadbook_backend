@@ -487,6 +487,19 @@ class Product(Timestamp):
     supplier = models.ForeignKey(
         Supplier, on_delete=models.CASCADE, blank=True, null=True
     )
+
+    # ── TASK2: New product fields ────────────────────────────────────────────
+    arabic_name = models.CharField(max_length=200, blank=True, null=True)
+    is_tax_applied = models.BooleanField(default=False)
+    tax_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0, blank=True, null=True)
+    min_sales_rate = models.DecimalField(max_digits=12, decimal_places=2, default=0, blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+    is_multiple_unit_enabled = models.BooleanField(default=False)
+    remarks = models.TextField(blank=True, null=True)
+    rm_element_used = models.CharField(max_length=500, blank=True, null=True, help_text="RM / Element Used")
+    hsn_code = models.CharField(max_length=50, blank=True, null=True, help_text="HSN Code")
+    avg_qty = models.DecimalField(max_digits=12, decimal_places=2, default=0, blank=True, null=True)
+
     createdAt = models.DateTimeField(default=now, blank=True, null=True)
     updateAt = models.DateTimeField(auto_now=True)
 

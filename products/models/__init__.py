@@ -9,6 +9,7 @@ from .product_model import (
     UnitConversionStep,
 )
 from .unit_model import Unit
+from .unit_price_model import ProductUnitPrice
 from .inventory_model import (
     InventoryItem,
     InventoryCategory,
@@ -35,6 +36,7 @@ __all__ = [
     "UnitConversionGroup",
     "UnitConversionStep",
     "Unit",
+    "ProductUnitPrice",
     "InventoryItem",
     "InventoryCategory",
     "StockMovement",

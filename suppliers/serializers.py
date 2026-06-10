@@ -138,6 +138,15 @@ class SupplierSerializer(serializers.ModelSerializer):
             "rating",
             "totalPurchases",
             "totalSpent",
+            "arabic_name",
+            "arabic_address",
+            "mobile_number",
+            "vat_no",
+            "cr_number",
+            "is_effected_to_ledger",
+            "due_period",
+            "remarks",
+            "opening_balance",
         ]
         read_only_fields = (
             "id",
@@ -146,6 +155,10 @@ class SupplierSerializer(serializers.ModelSerializer):
             "totalPurchases",
             "category_detail",
         )
+        extra_kwargs = {
+            "name": {"required": False, "allow_blank": True},
+            "supplier_code": {"required": False, "allow_blank": True},
+        }
 
     def to_representation(self, instance):
         """Customize the output representation"""

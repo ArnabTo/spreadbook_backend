@@ -3,15 +3,20 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.db import models
 from django.utils import timezone
-from .models import Company, Branch, CompanyCustomization, Warehouse
+from .models import Company, Branch, CompanyCustomization, Warehouse, Country, StateProvince
 from .serializers import (
     CompanySerializer,
     CompanyListSerializer,
     BranchSerializer,
     CompanyCustomizationSerializer,
     WarehouseSerializer,
+    CountrySerializer,
+    StateProvinceSerializer,
+    WarehouseDetailSerializer,
 )
 from rest_framework import serializers, viewsets, permissions, filters
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework.pagination import PageNumberPagination
 from rest_framework import generics
 from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import render, get_object_or_404
@@ -754,3 +759,50 @@ class CompanyCustomizationViewSet(viewsets.ModelViewSet):
 
         serializer = self.get_serializer(customization)
         return Response(serializer.data)
+
+
+
+class CountryViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = Country.objects.filter(is_active=True).order_by("name")
+    serializer_class = CountrySerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+
+class StateProvinceViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = StateProvinceSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        qs = StateProvince.objects.filter(is_active=True).select_related("country").order_by("name")
+        country_id = self.request.query_params.get("country_id")
+        if country_id:
+            qs = qs.filter(country_id=country_id)
+        return qs
+
+
+class WarehouseViewSet(viewsets.ModelViewSet):
+    serializer_class = WarehouseDetailSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = PageNumberPagination
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ["name", "code", "city"]
+    ordering_fields = ["name", "code", "city", "postedAt"]
+    ordering = ["name"]
+
+    def get_queryset(self):
+        qs = Warehouse.objects.select_related("company", "country_ref", "state_ref").all()
+        user = self.request.user
+        from common.drf_scoping import is_unrestricted_user, get_company_ids_for_user
+        if not is_unrestricted_user(user):
+            company_ids = get_company_ids_for_user(user)
+            if company_ids:
+                qs = qs.filter(company_id__in=list(company_ids))
+            else:
+                return Warehouse.objects.none()
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save()
+
+    def perform_update(self, serializer):
+        serializer.save()

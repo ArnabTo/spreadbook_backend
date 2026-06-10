@@ -270,6 +270,8 @@ CRONJOBS = [
 
 
 LOCAL_APPS = [
+    "account_groups.apps.AccountGroupsConfig",
+    "financial_years.apps.FinancialYearsConfig",
     "accounts.apps.AccountsConfig",
     "analytics.apps.AnalyticsConfig",
     "authenticator.apps.AuthenticatorConfig",

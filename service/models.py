@@ -1,5 +1,6 @@
 from customers.models import Customer
 from django.db import models
+from django.db.models import Q
 from utils.models.common_fields import Timestamp
 from ckeditor.fields import RichTextField
 from django.utils.text import slugify
@@ -87,3 +88,50 @@ class Service(Timestamp):
           self.grand_total - self.vat + self.charge
           self.paid_amount = self.grand_total - self.charge
           super(Service, self).save(*args, **kwargs)
+
+
+class ProductService(Timestamp):
+    """Product Service catalog item — company-scoped, similar to Product but for services."""
+
+    company = models.ForeignKey(
+        "company.Company",
+        on_delete=models.CASCADE,
+        db_index=True,
+        related_name="product_services",
+    )
+    name = models.CharField(max_length=200)
+    code = models.CharField(max_length=50, db_index=True)
+    arabic_name = models.CharField(max_length=200, blank=True, null=True)
+    category = models.ForeignKey(
+        "products.Category",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="product_services",
+    )
+    is_tax_applied = models.BooleanField(default=False)
+    tax_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0, blank=True, null=True)
+    sales_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    quality_applicable = models.BooleanField(default=False)
+    minimum_sales_rate = models.DecimalField(max_digits=12, decimal_places=2, default=0, blank=True, null=True)
+    avg_qty = models.DecimalField(max_digits=12, decimal_places=2, default=0, blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+
+    createdAt = models.DateTimeField(default=now, blank=True, null=True)
+    updatedAt = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["company", "code"],
+                name="uniq_productservice_company_code",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["company", "name"], name="idx_ps_company_name"),
+            models.Index(fields=["company", "category"], name="idx_ps_company_category"),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.code})"

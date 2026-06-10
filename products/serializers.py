@@ -29,6 +29,7 @@ from .models.rating_model import Rating
 from .models.review_model import Review
 from .models.stock_transfer_model import StockTransfer, StockTransferItem
 from .models import ProductType, GenericName, Brand, ProductBarcode, ProductBatch
+from .models.unit_price_model import ProductUnitPrice
 from .models.unit_model import Unit
 from suppliers.models import Supplier
 from .function import attempt_json_deserialize
@@ -208,6 +209,7 @@ class ProductSerializer(serializers.ModelSerializer):
         source="selling_unit.name", read_only=True, default=None
     )
     product_units = serializers.SerializerMethodField()
+    unit_prices_data = serializers.SerializerMethodField()
     # Warehouse tracking read-only helpers
     warehouse_name = serializers.CharField(
         source="warehouse.name", read_only=True, default=None
@@ -232,6 +234,9 @@ class ProductSerializer(serializers.ModelSerializer):
         return ProductUnitSerializer(
             product_units.all(), many=True, context=self.context
         ).data
+
+    def get_unit_prices_data(self, instance):
+        return ProductUnitPriceSerializer(instance.unit_prices.all(), many=True).data
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -298,6 +303,20 @@ class ProductSerializer(serializers.ModelSerializer):
         return super().update(instance, validated_data)
 
 
+class ProductUnitPriceSerializer(serializers.ModelSerializer):
+    measuring_unit_name = serializers.CharField(source="measuring_unit.name", read_only=True, default=None)
+
+    class Meta:
+        model = ProductUnitPrice
+        fields = ["id", "measuring_unit", "measuring_unit_name", "sales_price", "purchase_price"]
+
+
+class ProductUnitPriceWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductUnitPrice
+        fields = ["id", "measuring_unit", "sales_price", "purchase_price"]
+
+
 class ProductPostSerializer(serializers.ModelSerializer):
     # category = serializers.StringRelatedField(many=True)
     newLabel = NewLavelUpdateSerializer(required=False)  # f
@@ -350,6 +369,10 @@ class ProductPostSerializer(serializers.ModelSerializer):
         help_text="Low stock threshold entered in buying units; converted to stored units by serializer.",
     )
     product_units_data = serializers.SerializerMethodField(read_only=True)
+
+    # Multiple measuring unit pricing
+    unit_prices = ProductUnitPriceWriteSerializer(many=True, required=False, write_only=True)
+    unit_prices_data = serializers.SerializerMethodField(read_only=True)
 
     # Simple buy/sell unit helpers (read names alongside FK ids)
     buying_unit = serializers.PrimaryKeyRelatedField(
@@ -404,6 +427,43 @@ class ProductPostSerializer(serializers.ModelSerializer):
                 }
             )
         return rows
+
+    def get_unit_prices_data(self, obj):
+        return ProductUnitPriceSerializer(obj.unit_prices.all(), many=True).data
+
+    def _upsert_unit_prices(self, product, rows):
+        if rows is None:
+            return
+        existing_ids = set(product.unit_prices.values_list("id", flat=True))
+        seen_ids = set()
+        for row in rows:
+            row_id = row.get("id")
+            unit_id = row.get("measuring_unit")
+            if not unit_id:
+                continue
+            if row_id:
+                try:
+                    up = product.unit_prices.get(id=row_id)
+                    up.sales_price = row.get("sales_price", up.sales_price)
+                    up.purchase_price = row.get("purchase_price", up.purchase_price)
+                    up.save(update_fields=["sales_price", "purchase_price"])
+                    seen_ids.add(row_id)
+                except ProductUnitPrice.DoesNotExist:
+                    ProductUnitPrice.objects.create(
+                        product=product, measuring_unit_id=unit_id,
+                        sales_price=row.get("sales_price", 0),
+                        purchase_price=row.get("purchase_price", 0),
+                    )
+            else:
+                if not product.unit_prices.filter(measuring_unit_id=unit_id).exists():
+                    ProductUnitPrice.objects.create(
+                        product=product, measuring_unit_id=unit_id,
+                        sales_price=row.get("sales_price", 0),
+                        purchase_price=row.get("purchase_price", 0),
+                    )
+        to_remove = existing_ids - seen_ids
+        if to_remove:
+            product.unit_prices.filter(id__in=to_remove).delete()
 
     def _upsert_product_units(self, product, rows):
         if rows is None:
@@ -464,6 +524,15 @@ class ProductPostSerializer(serializers.ModelSerializer):
         for row in normalized:
             ProductUnit.objects.create(product=product, **row)
 
+    def to_internal_value(self, data):
+        import json
+        if isinstance(data.get("unit_prices"), str):
+            try:
+                data = data.copy()
+                data["unit_prices"] = json.loads(data["unit_prices"])
+            except (json.JSONDecodeError, TypeError):
+                raise serializers.ValidationError({"unit_prices": "Invalid JSON format"})
+        return super().to_internal_value(data)
     def create(self, validated_data):
         from django.db import transaction
 
@@ -531,6 +600,11 @@ class ProductPostSerializer(serializers.ModelSerializer):
             )
 
             self._upsert_product_units(product, product_units_data)
+
+            # Upsert unit prices
+            unit_prices_data = validated_data.pop("unit_prices", None)
+            if unit_prices_data is not None:
+                self._upsert_unit_prices(product, unit_prices_data)
 
             company = product.companyId
             warehouse = product.warehouse
@@ -739,6 +813,9 @@ class ProductPostSerializer(serializers.ModelSerializer):
                 )
 
             self._upsert_product_units(instance, product_units_data)
+            unit_prices_data = validated_data.pop("unit_prices", None)
+            if unit_prices_data is not None:
+                self._upsert_unit_prices(instance, unit_prices_data)
 
             logger.debug(
                 "ProductPostSerializer.update saved id=%s display_unit=%s in_stock=%s",
@@ -849,9 +926,22 @@ class ProductImagePostSerializer(serializers.ModelSerializer):
 
 
 class UnitSerializer(serializers.ModelSerializer):
+    parent_name = serializers.CharField(source="parent.name", read_only=True, default=None)
+
     class Meta:
         model = Unit
-        fields = ["id", "name", "status"]
+        fields = [
+            "id",
+            "name",
+            "short_name",
+            "arabic_name",
+            "is_child",
+            "parent",
+            "parent_name",
+            "quantity",
+            "status",
+        ]
+        read_only_fields = ("id", "companyId")
 
 
 class ProductUnitSerializer(serializers.ModelSerializer):

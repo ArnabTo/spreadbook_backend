@@ -177,6 +177,17 @@ class Supplier(Timestamp):
         blank=True,
     )
 
+    # ── TASK5 new fields ──
+    arabic_name = models.CharField(max_length=200, blank=True, null=True)
+    arabic_address = models.TextField(blank=True, null=True)
+    mobile_number = models.CharField(max_length=20, blank=True, null=True)
+    vat_no = models.CharField(max_length=50, blank=True, null=True, verbose_name=_("VAT No"))
+    cr_number = models.CharField(max_length=50, blank=True, null=True, verbose_name=_("CR Number"))
+    is_effected_to_ledger = models.BooleanField(default=False)
+    due_period = models.PositiveIntegerField(default=0, help_text="Number of days", blank=True, null=True)
+    remarks = models.TextField(blank=True, null=True)
+    opening_balance = models.DecimalField(max_digits=12, decimal_places=2, default=0, blank=True, null=True)
+
     class Meta:
         verbose_name = _("Supplier")
         verbose_name_plural = _("Suppliers")
@@ -186,6 +197,9 @@ class Supplier(Timestamp):
             models.Index(fields=["status"]),
             models.Index(fields=["category"]),
             models.Index(fields=["companyId"]),
+            models.Index(fields=["name"]),
+            models.Index(fields=["mobile_number"]),
+            models.Index(fields=["email"]),
         ]
 
     def __str__(self):

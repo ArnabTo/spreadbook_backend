@@ -21,6 +21,8 @@ from calendar_events import urls as CalendarEvents
 from expense import urls as Expense
 from my_project import urls as Project
 from blog import urls as BlogPost
+from account_groups import urls as AccountGroups
+from financial_years import urls as FinancialYears
 from authenticator import urls as GenUser
 from company import urls as Company
 from customers import urls as Customer
@@ -67,6 +69,8 @@ urlpatterns = [
     path("", include(Project)),
     path("", include(PromotionsDiscounts)),
     path("", include(RecipeWasteManagement)),
+    path("", include(AccountGroups)),
+    path("", include(FinancialYears)),
     path("api/dashboard/", include(Dashboard)),
     path("api/reports/", include(Reports)),
     path("api/", include(Reseller)),

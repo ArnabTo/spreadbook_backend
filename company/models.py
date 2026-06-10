@@ -454,7 +454,7 @@ class Branch(models.Model):
         return str(self.company.id) if self.company else None
 
     def save(self, *args, **kwargs):
-        if not self.code and self.company:
+        if not self.code:
             company_prefix = "".join(
                 char
                 for char in str(
@@ -497,6 +497,34 @@ class Branch(models.Model):
         super().save(*args, **kwargs)
 
 
+class Country(models.Model):
+    name = models.CharField(max_length=100, unique=True)
+    arabic_name = models.CharField(max_length=100, blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        verbose_name_plural = "Countries"
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
+class StateProvince(models.Model):
+    country = models.ForeignKey(Country, on_delete=models.CASCADE, related_name="states")
+    name = models.CharField(max_length=100)
+    arabic_name = models.CharField(max_length=100, blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        verbose_name_plural = "States / Provinces"
+        ordering = ["country", "name"]
+        unique_together = ["country", "name"]
+
+    def __str__(self):
+        return f"{self.name}, {self.country.name}"
+
+
 class Warehouse(models.Model):
     company = models.ForeignKey(
         Company,
@@ -513,10 +541,25 @@ class Warehouse(models.Model):
         help_text="Parent warehouse",
     )
 
-    name = models.CharField(max_length=100, help_text="Warehouse name")
+    name = models.CharField(max_length=100, blank=True, null=True, help_text="Warehouse name")
     code = models.CharField(
-        max_length=20, unique=True, help_text="Unique warehouse code"
+        max_length=20, unique=True, blank=True, null=True, help_text="Unique warehouse code"
     )
+
+    country_ref = models.ForeignKey(Country, on_delete=models.SET_NULL, null=True, blank=True, related_name="warehouses")
+    state_ref = models.ForeignKey(StateProvince, on_delete=models.SET_NULL, null=True, blank=True, related_name="warehouses")
+    arabic_country = models.CharField(max_length=100, blank=True, null=True)
+    arabic_state = models.CharField(max_length=100, blank=True, null=True)
+    arabic_city = models.CharField(max_length=100, blank=True, null=True)
+    arabic_building_no = models.CharField(max_length=50, blank=True, null=True)
+    arabic_street_name = models.CharField(max_length=200, blank=True, null=True)
+    arabic_district = models.CharField(max_length=100, blank=True, null=True)
+    arabic_additional_no = models.CharField(max_length=50, blank=True, null=True)
+    arabic_zip_code = models.CharField(max_length=20, blank=True, null=True)
+    building_no = models.CharField(max_length=50, blank=True, null=True)
+    street_name = models.CharField(max_length=200, blank=True, null=True)
+    district = models.CharField(max_length=100, blank=True, null=True)
+    additional_no = models.CharField(max_length=50, blank=True, null=True)
 
     phoneNumber = models.CharField(max_length=20, blank=True, null=True)
     email = models.EmailField(blank=True, null=True)
@@ -586,7 +629,7 @@ class Warehouse(models.Model):
         return self.warehouse_branches.filter(is_active=True).count()
 
     def save(self, *args, **kwargs):
-        if not self.code and self.company:
+        if not self.code:
             company_prefix = (self.company.name or "WH")[:2].upper()
             wh_count = Warehouse.objects.filter(company=self.company).count() + 1
             self.code = f"WH{company_prefix}{wh_count:03d}"
