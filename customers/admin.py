@@ -8,7 +8,15 @@ from django.db.models import Count
 from django.db.models.functions import TruncDay
 from django.utils.html import format_html
 
-from .models import Customer
+from .models import Customer, CustomerAttachment
+
+
+@admin.register(CustomerAttachment)
+class CustomerAttachmentAdmin(admin.ModelAdmin):
+    list_display = ("customer", "original_filename", "file_size", "uploaded_at")
+    search_fields = ("original_filename", "customer__name")
+    list_filter = ("uploaded_at",)
+    readonly_fields = ("uploaded_at",)
 
 
 @admin.register(Customer)
@@ -18,6 +26,7 @@ class CustomerAdmin(admin.ModelAdmin):
         "name",
         "customer_code",
         "phoneNumber",
+        "mobile_number",
         "email",
         "category_badge",
         "status_badge",
@@ -30,11 +39,12 @@ class CustomerAdmin(admin.ModelAdmin):
         "category",
         "status",
         "gender",
+        "is_effected_to_ledger",
         "created_at",
         "updated_at",
         "lastVisit",
     )
-    search_fields = ("name", "customer_code", "phoneNumber", "email", "fullAddress")
+    search_fields = ("name", "customer_code", "phoneNumber", "mobile_number", "email", "fullAddress", "contact_person")
     readonly_fields = (
         "customer_code",
         "totalOrders",
@@ -52,10 +62,28 @@ class CustomerAdmin(admin.ModelAdmin):
                 "fields": (
                     "customer_code",
                     "name",
+                    "display_name",
+                    "arabic_name",
+                    "address",
+                    "arabic_address",
                     "phoneNumber",
+                    "mobile_number",
                     "email",
                     "gender",
                     "avatarUrl",
+                )
+            },
+        ),
+        (
+            "Accounting & Compliance",
+            {
+                "fields": (
+                    "vat_no",
+                    "cr_number",
+                    "is_effected_to_ledger",
+                    "credit_period",
+                    "credit_limit",
+                    "opening_balance",
                 )
             },
         ),
@@ -71,14 +99,36 @@ class CustomerAdmin(admin.ModelAdmin):
             },
         ),
         (
-            "Address & Contact",
+            "Contact & Sales",
+            {
+                "fields": (
+                    "contact_person",
+                    "sales_person",
+                )
+            },
+        ),
+        (
+            "Address Details",
             {
                 "fields": (
                     "fullAddress",
                     "addressType",
+                    "country_ref",
+                    "arabic_country",
+                    "state_ref",
+                    "arabic_state",
                     "city",
+                    "arabic_city",
+                    "building_no",
+                    "arabic_building_no",
+                    "street_name",
+                    "arabic_street_name",
+                    "district",
+                    "arabic_district",
+                    "additional_no",
+                    "arabic_additional_no",
                     "zip_code",
-                    "company",
+                    "arabic_zip_code",
                 )
             },
         ),
@@ -141,7 +191,7 @@ class CustomerAdmin(admin.ModelAdmin):
     @admin.display(description="Total Spent", ordering="totalSpent")
     def total_spent_display(self, obj):
         return format_html(
-            '<strong style="color: #10B981;">৳{}</strong>',
+            '<strong style="color: #10B981;">{}</strong>',
             f"{float(obj.totalSpent):,.2f}",
         )
 
@@ -160,24 +210,16 @@ class CustomerAdmin(admin.ModelAdmin):
         return format_html("<b>{}</b> <br> {}", result, num2words(result).capitalize())
 
     def changelist_view(self, request, extra_context=None):
-        """Aggregate new customers per day"""
         chart_data = (
             Customer.objects.annotate(date=TruncDay("created_at"))
             .values("date")
             .annotate(y=Count("id"))
             .order_by("-date")
         )
-        # Serialize and attach the chart data to the template context
         as_json = json.dumps(list(chart_data), cls=DjangoJSONEncoder)
-
         extra_context = extra_context or {"chart_data": as_json}
-
-        # Call the superclass changelist_view to render the page
         return super().changelist_view(request, extra_context=extra_context)
 
     def save_model(self, request, obj, form, change):
-        """
-        Associate model with current user while saving.
-        """
         obj.user = request.user
         super().save_model(request, obj, form, change)

@@ -309,6 +309,7 @@ LOCAL_APPS = [
     "inventory_log.apps.InventoryLogConfig",
     "purchase.apps.PurchaseConfig",
     "payroll.apps.PayrollConfig",
+    "prefixes.apps.PrefixesConfig",
     "reseller.apps.ResellerConfig",
     "returns.apps.ReturnsConfig",
     "review.apps.ReviewConfig",

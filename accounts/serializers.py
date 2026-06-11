@@ -1,91 +1,110 @@
-from decimal import Clamped
-from djoser.serializers import UserCreateSerializer
-from django.contrib.auth import get_user_model
 from rest_framework import serializers
-from sales.models import SalesCash
-from .models.bank_account_model import Bank, Transition
-User = get_user_model()
+
+from accounts.models.account_models import Account
+from accounts.models.bank_account_model import Bank
 
 
+class AccountSerializer(serializers.ModelSerializer):
+    parent_name = serializers.SerializerMethodField()
+    country_name = serializers.SerializerMethodField()
+    state_name = serializers.SerializerMethodField()
 
+    class Meta:
+        model = Account
+        fields = [
+            "id",
+            "company",
+            "parent",
+            "parent_name",
+            "display_name",
+            "name",
+            "mailing_name",
+            "arabic_name",
+            "phone_number",
+            "mobile_number",
+            "bank_name",
+            "arabic_bank_name",
+            "bank_account_number",
+            "iban_no",
+            "branch_name",
+            "branch_code",
+            "swift_code",
+            "email",
+            "description",
+            "opening_balance",
+            "is_debit",
+            "cheque_print_enabled",
+            "country_ref",
+            "country_name",
+            "arabic_country",
+            "state_ref",
+            "state_name",
+            "arabic_state",
+            "city",
+            "arabic_city",
+            "building_no",
+            "arabic_building_no",
+            "street_name",
+            "arabic_street_name",
+            "district",
+            "arabic_district",
+            "additional_no",
+            "arabic_additional_no",
+            "zip_code",
+            "arabic_zip_code",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = (
+            "id",
+            "company",
+            "parent_name",
+            "country_name",
+            "state_name",
+            "created_at",
+            "updated_at",
+        )
+
+    def get_parent_name(self, obj):
+        return obj.parent.name if obj.parent and hasattr(obj.parent, 'name') else None
+
+    def get_country_name(self, obj):
+        return obj.country_ref.name if obj.country_ref else None
+
+    def get_state_name(self, obj):
+        return obj.state_ref.name if obj.state_ref else None
+
+    def validate_cheque_print_enabled(self, value):
+        if value is not False:
+            raise serializers.ValidationError("Cheque Print Enabled must always be false.")
+        return False
+
+    def validate(self, data):
+        if not data.get("name"):
+            raise serializers.ValidationError({"name": "Name is required."})
+        if not data.get("parent") and not self.instance:
+            raise serializers.ValidationError({"parent": "Parent is required."})
+        if not data.get("parent") and self.instance and not self.instance.parent:
+            raise serializers.ValidationError({"parent": "Parent is required."})
+        return data
+
+
+# ── Legacy Bank serializer (preserved) ──
 
 class BankAccountSerializer(serializers.ModelSerializer):
-     class Meta:
-          model = Bank
-          fields = "__all__"
-          
-     
-     def create(self, validated_data):
-          bank =  Bank.objects.create( 
-                                        company_id=self.context['request'].user.company_id,
-                                        creator= self.context['request'].user,
-                                        company= self.context['request'].user.company,
-                                        **validated_data
-                                        )
-          return bank
-     
-     def update(self, instance, validated_data):
-          return super().update(instance, validated_data)
+    class Meta:
+        model = Bank
+        fields = "__all__"
 
+    def create(self, validated_data):
+        bank = Bank.objects.create(
+            company_id=self.context["request"].user.company_id,
+            creator=self.context["request"].user,
+            company=self.context["request"].user.company,
+            **validated_data
+        )
+        return bank
 
-class TransitionSerializer(serializers.ModelSerializer):
-     # bank_account = BankAccountSerializer(required=False, read_only=True)
-     class Meta:
-          model = Transition
-          fields = "__all__"
-          
-     
-     def create(self, validated_data):
-          # transition_data = validated_data.pop('amount')
-          transferFund =  Transition.objects.create( 
-                                        company_id=self.context['request'].user.company_id,
-                                        creator= self.context['request'].user,
-                                        company= self.context['request'].user.company,
-                                        **validated_data
-                                        )
-          if transferFund.type_of_transfer == "Deposit":
-               salesCash = SalesCash.objects.get(company_id=transferFund.company_id )
-               bank = Bank.objects.get(id=transferFund.bank_account.id)
-               
-               transferFund.bank_balance = bank.current_balance
-               transferFund.cash_balance =  salesCash.amount
-               transferFund.account_number = bank.bank_account_number
-               transferFund.save()
-               # print("Deposit")
-               # print(salesCash.amount)
-               # print(transferFund.amount)
-               bank.current_balance = bank.current_balance + transferFund.amount
-               bank.save()
-               salesCash.amount = salesCash.amount - transferFund.amount
-               salesCash.save()
-          elif transferFund.type_of_transfer == "Withdraw":
-               salesCash = SalesCash.objects.get(company_id=transferFund.company_id )
-               bank = Bank.objects.get(id=transferFund.bank_account.id)
-               # print("Withdraw")
-               # print(salesCash.amount)
-               # print(transferFund.amount)
-               transferFund.bank_balance = bank.current_balance
-               transferFund.cash_balance =  salesCash.amount
-               transferFund.account_number = bank.bank_account_number
-               transferFund.save()
-               
-               bank.current_balance = bank.current_balance - transferFund.amount
-               bank.save()
-               salesCash.amount = salesCash.amount + transferFund.amount
-               salesCash.save()
-               
-          else:
-               pass
-          return transferFund
-     
-     def update(self, instance, validated_data):
-          return super().update(instance, validated_data)
-
-
-class GetTransitionSerializer(serializers.ModelSerializer):
-     bank_account = BankAccountSerializer(required=False)
-     class Meta:
-          model = Transition
-          fields = "__all__"
-
+    def update(self, instance, validated_data):
+        return super().update(instance, validated_data)
 

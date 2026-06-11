@@ -1,26 +1,34 @@
-from decimal import Clamped
-from djoser.serializers import UserCreateSerializer
-from django.contrib.auth import get_user_model
 from rest_framework import serializers
-from .models import Customer
+from .models import Customer, CustomerAttachment, ALLOWED_ATTACHMENT_EXTENSIONS
+import os
 
-User = get_user_model()
+
+class CustomerAttachmentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CustomerAttachment
+        fields = ["id", "file", "original_filename", "file_size", "uploaded_at"]
+        read_only_fields = ["id", "original_filename", "file_size", "uploaded_at"]
+
+    def validate_file(self, value):
+        ext = os.path.splitext(value.name)[1].lower().lstrip(".")
+        if ext not in ALLOWED_ATTACHMENT_EXTENSIONS:
+            raise serializers.ValidationError(
+                f"Unsupported file type '.{ext}'. Allowed: {', '.join(ALLOWED_ATTACHMENT_EXTENSIONS)}"
+            )
+        return value
+
+    def create(self, validated_data):
+        validated_data["original_filename"] = validated_data["file"].name
+        validated_data["file_size"] = validated_data["file"].size
+        return super().create(validated_data)
 
 
 class CustomerSerializer(serializers.ModelSerializer):
-    """
-    Enhanced serializer for Customer model with business logic
-    """
-
-    # Custom field serializations for better frontend integration
-    loyaltyPoints = serializers.IntegerField(read_only=True)
-    totalOrders = serializers.IntegerField(read_only=True)
-    totalSpent = serializers.DecimalField(
-        max_digits=10, decimal_places=2, read_only=True
-    )
-    lastVisit = serializers.DateField(read_only=True)
-    phone = serializers.CharField(source="phoneNumber", required=False)
-    address = serializers.CharField(source="fullAddress", required=False)
+    phone = serializers.CharField(source="phoneNumber", required=False, allow_blank=True)
+    attachments = CustomerAttachmentSerializer(many=True, read_only=True)
+    country_name = serializers.SerializerMethodField()
+    state_name = serializers.SerializerMethodField()
+    sales_person_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Customer
@@ -28,22 +36,60 @@ class CustomerSerializer(serializers.ModelSerializer):
             "id",
             "companyId",
             "branch",
+            # Party Info
             "name",
+            "display_name",
+            "arabic_name",
+            "address",
+            "arabic_address",
             "customer_code",
-            "email",
-            "phone",
             "phoneNumber",
+            "mobile_number",
+            "phone",
+            "email",
+            # Accounting
+            "vat_no",
+            "cr_number",
+            "is_effected_to_ledger",
+            "credit_period",
+            "credit_limit",
+            "opening_balance",
+            # Contact & Sales
+            "contact_person",
+            "sales_person",
+            "sales_person_name",
+            # Classification
             "category",
             "status",
+            # Business metrics (read-only)
             "totalOrders",
             "totalSpent",
             "loyaltyPoints",
             "lastVisit",
-            "address",
+            # Bilingual Address
+            "country_ref",
+            "country_name",
+            "arabic_country",
+            "state_ref",
+            "state_name",
+            "arabic_state",
+            "city",
+            "arabic_city",
+            "building_no",
+            "arabic_building_no",
+            "street_name",
+            "arabic_street_name",
+            "district",
+            "arabic_district",
+            "additional_no",
+            "arabic_additional_no",
+            "zip_code",
+            "arabic_zip_code",
+            # File attachments
+            "attachments",
+            # Legacy
             "fullAddress",
             "addressType",
-            "city",
-            "zip_code",
             "gender",
             "company",
             "url",
@@ -58,278 +104,89 @@ class CustomerSerializer(serializers.ModelSerializer):
             "id",
             "companyId",
             "customer_code",
-            "created_at",
-            "updated_at",
+            "country_name",
+            "state_name",
+            "sales_person_name",
+            "attachments",
             "totalOrders",
             "totalSpent",
             "loyaltyPoints",
             "lastVisit",
+            "created_at",
+            "updated_at",
         )
 
-    def to_representation(self, instance):
-        """Customize the output representation"""
-        data = super().to_representation(instance)
+    def get_country_name(self, obj):
+        return obj.country_ref.name if obj.country_ref else None
 
-        # Format phone number to string for frontend
+    def get_state_name(self, obj):
+        return obj.state_ref.name if obj.state_ref else None
+
+    def get_sales_person_name(self, obj):
+        if obj.sales_person:
+            return obj.sales_person.get_full_name() or obj.sales_person.username
+        return None
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
         if instance.phoneNumber:
             data["phone"] = str(instance.phoneNumber)
-        else:
-            data["phone"] = ""
-
-        # Ensure address is properly formatted
         if instance.fullAddress:
-            data["address"] = str(instance.fullAddress)
-        else:
-            data["address"] = ""
-
-        # Format decimal fields
+            data["fullAddress"] = str(instance.fullAddress)
         if instance.totalSpent is not None:
             data["totalSpent"] = float(instance.totalSpent)
-
         if instance.balance is not None:
             data["balance"] = float(instance.balance)
-
-        # Format dates for frontend
         if instance.lastVisit:
             data["lastVisit"] = instance.lastVisit.strftime("%Y-%m-%d")
-
         return data
 
     def create(self, validated_data):
-        """Create customer with proper initialization"""
-        # Handle phone field mapping
-        if "phone" in validated_data:
+        if "phone" in validated_data and validated_data.get("phone") is not None:
             validated_data["phoneNumber"] = validated_data.pop("phone")
+        else:
+            validated_data.pop("phone", None)
 
-        # Handle address field mapping
-        if "address" in validated_data:
-            validated_data["fullAddress"] = validated_data.pop("address")
-
-        # Initialize business fields if not provided
-        if "totalOrders" not in validated_data:
-            validated_data["totalOrders"] = 0
-        if "totalSpent" not in validated_data:
-            validated_data["totalSpent"] = 0
-        if "loyaltyPoints" not in validated_data:
-            validated_data["loyaltyPoints"] = 0
-
-        # Create the customer
-        customer = Customer.objects.create(**validated_data)
-        return customer
+        validated_data.setdefault("totalOrders", 0)
+        validated_data.setdefault("totalSpent", 0)
+        validated_data.setdefault("loyaltyPoints", 0)
+        return Customer.objects.create(**validated_data)
 
     def update(self, instance, validated_data):
-        """Update customer with validation"""
-        # Handle field mapping
         if "phone" in validated_data:
             validated_data["phoneNumber"] = validated_data.pop("phone")
-
-        if "address" in validated_data:
-            validated_data["fullAddress"] = validated_data.pop("address")
-
-        # Don't allow updating read-only business fields directly
         validated_data.pop("totalOrders", None)
         validated_data.pop("totalSpent", None)
         validated_data.pop("loyaltyPoints", None)
-
         return super().update(instance, validated_data)
 
-    def validate_email(self, value):
-        """Validate email uniqueness if provided"""
-        if value:
-            queryset = Customer.objects.filter(email=value)
-            if self.instance:
-                queryset = queryset.exclude(pk=self.instance.pk)
+    def validate_is_effected_to_ledger(self, value):
+        if value is not True:
+            raise serializers.ValidationError("Is Effected To Ledger must always be true.")
+        return True
 
-            if queryset.exists():
-                raise serializers.ValidationError(
-                    "A customer with this email already exists."
-                )
+    def validate_credit_period(self, value):
+        if value is not None and value < 0:
+            raise serializers.ValidationError("Credit Period must be >= 0.")
         return value
 
-    def validate_phone(self, value):
-        """Validate phone number uniqueness if provided"""
-        if value:
-            queryset = Customer.objects.filter(phoneNumber=value)
-            if self.instance:
-                queryset = queryset.exclude(pk=self.instance.pk)
+    def validate_credit_limit(self, value):
+        if value is not None and value < 0:
+            raise serializers.ValidationError("Credit Limit must be >= 0.")
+        return value
 
-            if queryset.exists():
-                raise serializers.ValidationError(
-                    "A customer with this phone number already exists."
-                )
+    def validate_email(self, value):
+        if value:
+            qs = Customer.objects.filter(email=value)
+            if self.instance:
+                qs = qs.exclude(pk=self.instance.pk)
+            if qs.exists():
+                raise serializers.ValidationError("A customer with this email already exists.")
         return value
 
     def validate(self, data):
-        """Cross-field validation"""
-        # Get name and email from either direct field or mapped field
         name = data.get("name")
         email = data.get("email")
-
-        # Ensure at least name or email is provided
         if not name and not email:
-            raise serializers.ValidationError(
-                "Customer must have either name or email address."
-            )
-
+            raise serializers.ValidationError("Customer must have either name or email address.")
         return data
-
-
-# class InvoiceSerialzer(serializers.ModelSerializer):
-#      id = serializers.IntegerField(required=False)
-#      class Meta:
-#           model = InvoiceItem
-#           fields = '__all__'
-
-#           read_only_fields = ('sell_invoice',)
-
-#      def create(self, validated_data):
-#           return super().create(validated_data)
-
-#      def update(self, instance, validated_data):
-#           return super().update(instance, validated_data)
-
-
-# class SaleSerializer(serializers.ModelSerializer):
-#      items = InvoiceSerialzer(many=True)
-#      invoiceFrom = InvoiceFromSerializer(required=False)
-#      invoiceTo = InvoiceToSerializer(required=False)
-#      class Meta:
-#           model = Sale
-#           fields = '__all__'
-
-# def create(self, validated_data):
-#      return super().create(validated_data)
-
-# def create(self, validated_data):
-
-#      items_data = validated_data.pop('items')
-#      sell_invoice = Sale.objects.create(**validated_data)
-#      # sell_invoice = Sale.objects.create(invoiceFrom = 1, invoiceTo="7b014ecd-85c0-4601-a5d0-6283a532240b", **validated_data)
-#      for item_data in items_data:
-#           InvoiceItem.objects.create(sell_invoice=sell_invoice, **item_data)
-#      return sell_invoice
-
-# def update(self, instance, validated_data):
-#      items = validated_data.pop('items')
-#      instance.invoiceNumber = validated_data.get("invoiceNumber", instance.invoiceNumber)
-#      instance.status = validated_data.get("status", instance.status)
-#      instance.payment_method = validated_data.get("payment_method", instance.payment_method)
-#      instance.is_paid = validated_data.get("is_paid", instance.is_paid)
-#      instance.taxes = validated_data.get("taxes", instance.taxes)
-#      instance.discount = validated_data.get("discount", instance.discount)
-#      instance.totalAmount = validated_data.get("totalAmount", instance.totalAmount)
-#      instance.pdf_file = validated_data.get("pdf_file", instance.pdf_file)
-#      instance.due = validated_data.get("due", instance.due)
-#      instance.shipping = validated_data.get("shipping", instance.shipping)
-#      instance.total = validated_data.get("total", instance.total)
-#      instance.user = validated_data.get("user", instance.user)
-#      instance.product = validated_data.get("product", instance.product)
-#      instance.invoiceTo = validated_data.get("invoiceTo", instance.invoiceTo)
-#      instance.invoiceFrom = validated_data.get("invoiceFrom", instance.invoiceFrom)
-
-#      instance.save()
-#      keep_items = []
-#      # existing_ids = [c.id for c in instance.items]
-#      for item in items:
-#           if "id" in item.keys():
-#                if InvoiceItem.objects.filter(id=item["id"]).exists():
-#                     c = InvoiceItem.objects.get(id=item["id"])
-#                     c.title = item.get('title', c.title)
-#                     c.description = item.get('description', c.description)
-#                     c.service = item.get('service', c.service)
-#                     c.quantity = item.get('quantity', c.quantity)
-#                     c.price = item.get('price', c.price)
-#                     c.total = item.get('total', c.total)
-#                     c.code = item.get('code', c.code)
-#                     c.duration = item.get('duration', c.duration)
-#                     c.sell_invoice = item.get('sell_invoice', c.sell_invoice)
-#                     c.product = item.get('product', c.product)
-#                     # InvoiceItem.objects.update(id==item["id"],title=c.title)
-#                     c.save()
-#                     keep_items.append(c.id)
-#                     print(item.get('title', c.title))
-#                else:
-#                     continue
-#           else:
-#                c = InvoiceItem.objects.create(**item, sell_invoice=instance)
-#                keep_items.append(c.id)
-#                print("Insider")
-
-#      for item in instance.items.all():
-#           if item.id not in keep_items:
-#                item.delete()
-
-#      return instance
-
-
-# class SalePostSerializer(serializers.ModelSerializer):
-#      items = InvoiceSerialzer(many=True)
-#      # invoiceFrom = InvoiceFromSerializer(required=False)
-#      # invoiceTo = InvoiceToSerializer(required=False)
-#      class Meta:
-#           model = Sale
-#           fields = '__all__'
-
-#      # def create(self, validated_data):
-#      #      return super().create(validated_data)
-
-#      def create(self, validated_data):
-
-#           items_data = validated_data.pop('items')
-#           sell_invoice = Sale.objects.create(**validated_data)
-#           # sell_invoice = Sale.objects.create(invoiceFrom = 1, invoiceTo="7b014ecd-85c0-4601-a5d0-6283a532240b", **validated_data)
-#           for item_data in items_data:
-#                InvoiceItem.objects.create(sell_invoice=sell_invoice, **item_data)
-#           return sell_invoice
-
-#      def update(self, instance, validated_data):
-#           items = validated_data.pop('items')
-#           instance.invoiceNumber = validated_data.get("invoiceNumber", instance.invoiceNumber)
-#           instance.status = validated_data.get("status", instance.status)
-#           instance.payment_method = validated_data.get("payment_method", instance.payment_method)
-#           instance.is_paid = validated_data.get("is_paid", instance.is_paid)
-#           instance.taxes = validated_data.get("taxes", instance.taxes)
-#           instance.discount = validated_data.get("discount", instance.discount)
-#           instance.totalAmount = validated_data.get("totalAmount", instance.totalAmount)
-#           instance.pdf_file = validated_data.get("pdf_file", instance.pdf_file)
-#           instance.due = validated_data.get("due", instance.due)
-#           instance.shipping = validated_data.get("shipping", instance.shipping)
-#           instance.total = validated_data.get("total", instance.total)
-#           instance.user = validated_data.get("user", instance.user)
-#           instance.product = validated_data.get("product", instance.product)
-#           instance.invoiceTo = validated_data.get("invoiceTo", instance.invoiceTo)
-#           instance.invoiceFrom = validated_data.get("invoiceFrom", instance.invoiceFrom)
-
-#           instance.save()
-#           keep_items = []
-#           # existing_ids = [c.id for c in instance.items]
-#           for item in items:
-#                if "id" in item.keys():
-#                     if InvoiceItem.objects.filter(id=item["id"]).exists():
-#                          c = InvoiceItem.objects.get(id=item["id"])
-#                          c.title = item.get('title', c.title)
-#                          c.description = item.get('description', c.description)
-#                          c.service = item.get('service', c.service)
-#                          c.quantity = item.get('quantity', c.quantity)
-#                          c.price = item.get('price', c.price)
-#                          c.total = item.get('total', c.total)
-#                          c.code = item.get('code', c.code)
-#                          c.duration = item.get('duration', c.duration)
-#                          c.sell_invoice = item.get('sell_invoice', c.sell_invoice)
-#                          c.product = item.get('product', c.product)
-#                          # InvoiceItem.objects.update(id==item["id"],title=c.title)
-#                          c.save()
-#                          keep_items.append(c.id)
-#                          print(item.get('title', c.title))
-#                     else:
-#                          continue
-#                else:
-#                     c = InvoiceItem.objects.create(**item, sell_invoice=instance)
-#                     keep_items.append(c.id)
-#                     print("Insider")
-
-#           for item in instance.items.all():
-#                if item.id not in keep_items:
-#                     item.delete()
-
-#           return instance
