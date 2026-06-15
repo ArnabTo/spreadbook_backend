@@ -453,6 +453,8 @@ class DeliveryNoteViewSet(viewsets.ModelViewSet):
                         p.selling_unit.name if p.selling_unit else None
                     ),
                     "default_rate": str(p.priceSale or p.price or 0),
+                    "is_tax_applied": bool(getattr(p, "is_tax_applied", False)),
+                    "tax_rate": str(getattr(p, "tax_rate", 0) or 0),
                     "unit_prices": unit_prices,
                     "product_units": product_units,
                 }

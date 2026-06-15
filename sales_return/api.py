@@ -13,6 +13,7 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from banking.models import BankAccount
 from authenticator.models import User as UserModel
 from common.drf_scoping import (
     apply_company_branch_scope,
@@ -26,37 +27,30 @@ from products.models import Product, Unit
 from sales_quotation.models import Currency
 from sales_quotation.serializers import CurrencySerializer
 
-from .models import SalesOrder, SalesOrderItem
+from .models import SalesReturn, SalesReturnItem, SalesReturnPayment
 from .serializers import (
-    SalesOrderDetailSerializer,
-    SalesOrderItemSerializer,
-    SalesOrderListSerializer,
-    SalesOrderWriteSerializer,
+    SalesReturnDetailSerializer,
+    SalesReturnItemSerializer,
+    SalesReturnListSerializer,
+    SalesReturnWriteSerializer,
 )
 
 
-def _generate_bill_number(company, financial_year=None) -> str:
-    """Generate the next sales order number atomically using the Prefix system.
-
-    Falls back to SO-<n> within the company if no Prefix record exists.
-    """
-
+def _generate_bill_number(company, financial_year=None):
     if not company:
         return ""
-
     qs = Prefix.objects.filter(
-        company=company, type="sales_order", applicable=True
+        company=company, type="sales_return", applicable=True
     )
     if financial_year is not None:
         qs = qs.filter(financial_year=financial_year)
     else:
         qs = qs.filter(financial_year__isnull=True)
-
     with transaction.atomic():
         prefix_obj = qs.select_for_update().order_by("id").first()
         if prefix_obj is None:
             last_qs = (
-                SalesOrder.objects.filter(companyId=company)
+                SalesReturn.objects.filter(companyId=company)
                 .order_by("-created_at")
                 .values_list("bill_number", flat=True)
             )
@@ -68,8 +62,7 @@ def _generate_bill_number(company, financial_year=None) -> str:
                     next_index = int("".join(ch for ch in tail if ch.isdigit())) + 1
                 except (ValueError, IndexError):
                     next_index = 100
-            return f"SO-{next_index}"
-
+            return f"SR-{next_index}"
         Prefix.objects.filter(pk=prefix_obj.pk).update(
             current_index=F("current_index") + 1
         )
@@ -83,15 +76,13 @@ def _generate_bill_number(company, financial_year=None) -> str:
         return f"{prefix_obj.prefix}{sep}{new_index:0{width}d}"
 
 
-class SalesOrderPageNumberPagination(PageNumberPagination):
+class SalesReturnPageNumberPagination(PageNumberPagination):
     page_size = 10
     page_size_query_param = "page_size"
     max_page_size = 100
 
     def get_paginated_response(self, data):
-        from rest_framework.response import Response as DRFResponse
-
-        return DRFResponse(
+        return Response(
             {
                 "count": self.page.paginator.count,
                 "total_pages": self.page.paginator.num_pages,
@@ -104,40 +95,35 @@ class SalesOrderPageNumberPagination(PageNumberPagination):
         )
 
 
-class SalesOrderViewSet(viewsets.ModelViewSet):
+class SalesReturnViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
-    pagination_class = SalesOrderPageNumberPagination
+    pagination_class = SalesReturnPageNumberPagination
 
     def get_serializer_class(self):
         if self.action in ("create", "update", "partial_update"):
-            return SalesOrderWriteSerializer
+            return SalesReturnWriteSerializer
         if self.action == "retrieve":
-            return SalesOrderDetailSerializer
-        return SalesOrderListSerializer
+            return SalesReturnDetailSerializer
+        return SalesReturnListSerializer
 
     def get_queryset(self):
         qs = (
-            SalesOrder.objects.select_related(
-                "customer",
-                "currency",
-                "sales_person",
+            SalesReturn.objects.select_related(
+                "customer", "currency", "sales_person", "branch", "bank_account",
             )
             .prefetch_related(
                 Prefetch(
                     "items",
-                    queryset=SalesOrderItem.objects.select_related(
-                        "product", "unit"
-                    ),
-                )
+                    queryset=SalesReturnItem.objects.select_related("product", "unit"),
+                ),
+                Prefetch("payments", queryset=SalesReturnPayment.objects.all()),
             )
             .all()
         )
         qs = apply_company_branch_scope(
-            request=self.request,
-            queryset=qs,
-            company_id_field="companyId_id",
-            branch_id_field="branch_id",
+            request=self.request, queryset=qs,
+            company_id_field="companyId_id", branch_id_field="branch_id",
         )
         params = self.request.query_params
         bill_number = params.get("bill_number")
@@ -152,27 +138,21 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         date_to = params.get("date_to")
         if date_to:
             qs = qs.filter(date__lte=date_to)
-        po_ref = params.get("po_ref")
-        if po_ref:
-            qs = qs.filter(po_ref__icontains=po_ref)
         salesperson = params.get("sales_person")
         if salesperson:
             qs = qs.filter(sales_person_id=salesperson)
         return qs.order_by("-date", "-created_at")
 
-    # ---- write helpers ----
     def _resolve_company(self, user, requested_company_id=None):
         if is_unrestricted_user(user):
             if requested_company_id:
                 from company.models import Company
-
                 return Company.objects.filter(id=requested_company_id).first()
             return getattr(user, "companyId", None)
         ids = list(get_company_ids_for_user(user))
         if not ids:
             return None
         from company.models import Company
-
         if requested_company_id and str(requested_company_id) in [str(i) for i in ids]:
             return Company.objects.filter(id=requested_company_id).first()
         return Company.objects.filter(id__in=ids).first()
@@ -181,7 +161,6 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         if not requested_branch_id:
             return None
         from company.models import Branch
-
         if is_unrestricted_user(user):
             return Branch.objects.filter(id=requested_branch_id).first()
         allowed = user.branchAccess.values_list("id", flat=True)
@@ -194,16 +173,8 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         for idx, raw in enumerate(items_data or []):
             product_id = raw.get("product")
             unit_id = raw.get("unit")
-            product = (
-                Product.objects.filter(id=product_id).first()
-                if product_id
-                else None
-            )
-            unit = (
-                Unit.objects.filter(id=unit_id).first()
-                if unit_id
-                else None
-            )
+            product = Product.objects.filter(id=product_id).first() if product_id else None
+            unit = Unit.objects.filter(id=unit_id).first() if unit_id else None
             try:
                 qty = Decimal(str(raw.get("qty") or 0))
             except Exception:
@@ -225,77 +196,83 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
             tax_amount = (amount * tax_percent) / Decimal("100")
             total = amount + tax_amount
             objects.append(
-                SalesOrderItem(
-                    product=product,
-                    unit=unit,
-                    qty=qty,
-                    rate=rate,
-                    discount_amount=discount_amount,
-                    product_total=product_total,
-                    amount=amount,
-                    tax_percent=tax_percent,
-                    tax_amount=tax_amount,
-                    total=total,
+                SalesReturnItem(
+                    product=product, unit=unit,
+                    qty=qty, rate=rate, discount_amount=discount_amount,
+                    product_total=product_total, amount=amount,
+                    tax_percent=tax_percent, tax_amount=tax_amount, total=total,
                     si_no=int(raw.get("si_no") or idx + 1),
                 )
             )
         return objects
 
-    def _recalc_totals(self, order: SalesOrder, items_data):
+    def _recalc_totals(self, sales_return, items_data):
         items = self._build_items(items_data)
         total = sum((i.amount for i in items), Decimal("0"))
         tax_total = sum((i.tax_amount for i in items), Decimal("0"))
-        product_discount_total = sum((i.discount_amount for i in items), Decimal("0"))
         try:
-            cash_discount_total = Decimal(str(self.request.data.get("cash_discount_total") or 0))
+            prod_disc = Decimal(str(self.request.data.get("product_discount_total") or 0))
         except Exception:
-            cash_discount_total = Decimal("0")
-        grand_total = total + tax_total - product_discount_total - cash_discount_total
-        order.total = total
-        order.tax_total = tax_total
-        order.product_discount_total = product_discount_total
-        order.cash_discount_total = cash_discount_total
-        order.grand_total = grand_total
+            prod_disc = Decimal("0")
+        try:
+            cash_disc = Decimal(str(self.request.data.get("cash_discount_total") or 0))
+        except Exception:
+            cash_disc = Decimal("0")
+        try:
+            paid = Decimal(str(self.request.data.get("paid_amount") or 0))
+        except Exception:
+            paid = Decimal("0")
+        grand_total = total + tax_total - prod_disc - cash_disc
+        pending = max(Decimal("0"), grand_total - paid)
+        sales_return.total = total
+        sales_return.tax_total = tax_total
+        sales_return.product_discount_total = prod_disc
+        sales_return.cash_discount_total = cash_disc
+        sales_return.paid_amount = paid
+        sales_return.pending_amount = pending
+        sales_return.grand_total = grand_total
         return items
 
-    # ---- create / update ----
-    def _get_products_payload(self, request):
-        products = None
+    def _get_json_payload(self, request, key):
+        val = None
         try:
-            products = request.data.get("products")
+            val = request.data.get(key)
         except Exception:
-            products = None
-        if isinstance(products, str):
+            val = None
+        if isinstance(val, str):
             try:
-                parsed = json.loads(products)
+                parsed = json.loads(val)
             except (ValueError, TypeError):
                 parsed = None
             if isinstance(parsed, list):
                 return parsed
-        if isinstance(products, list):
-            return products
+        if isinstance(val, list):
+            return val
         return []
 
-    def _build_request_data_for_serializer(self, request, products_list):
+    def _build_request_data_for_serializer(self, request, products_list, payments_list=None):
         data = {}
         try:
             items = request.data.items()
         except Exception:
             items = []
         for k, v in items:
-            if k == "products":
+            if k in ("products", "payments_data"):
                 continue
             data[k] = v
         data["products"] = products_list
+        data["payments_data"] = payments_list or []
         return data
 
     def create(self, request, *args, **kwargs):
-        products_list = self._get_products_payload(request)
-        payload = self._build_request_data_for_serializer(request, products_list)
+        products_list = self._get_json_payload(request, "products")
+        payments_list = self._get_json_payload(request, "payments_data")
+        payload = self._build_request_data_for_serializer(request, products_list, payments_list)
         serializer = self.get_serializer(data=payload)
         serializer.is_valid(raise_exception=True)
         validated = serializer.validated_data
         items_data = validated.pop("products", []) or []
+        payments_data = validated.pop("payments_data", []) or []
 
         user = request.user
         with transaction.atomic():
@@ -305,46 +282,61 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
             branch = self._resolve_branch(
                 user, request.data.get("branch") or validated.get("branch")
             )
-
             fy = validated.get("financial_year")
             if fy is None:
                 fy = (
-                    FinancialYear.objects.filter(
-                        company=company, closed=False
-                    )
-                    .order_by("-from_date")
-                    .first()
+                    FinancialYear.objects.filter(company=company, closed=False)
+                    .order_by("-from_date").first()
                 )
 
-            order = SalesOrder(companyId=company, branch=branch, user=user)
+            sr = SalesReturn(companyId=company, branch=branch, user=user)
             for field, value in validated.items():
                 if field in ("attachment",):
                     continue
-                setattr(order, field, value)
+                setattr(sr, field, value)
             attachment = request.FILES.get("attachment")
             if attachment is not None:
-                order.attachment = attachment
-            order.bill_number = _generate_bill_number(company, fy)
-            order.financial_year = fy
-            item_objs = self._recalc_totals(order, items_data)
-            order.save()
+                sr.attachment = attachment
+            sr.bill_number = _generate_bill_number(company, fy)
+            sr.financial_year = fy
+            item_objs = self._recalc_totals(sr, items_data)
+            sr.save()
 
             for item in item_objs:
-                item.order = order
-            SalesOrderItem.objects.bulk_create(item_objs)
+                item.sales_return = sr
+            SalesReturnItem.objects.bulk_create(item_objs)
 
-        out = SalesOrderDetailSerializer(order).data
+            # Create payments
+            if payments_data:
+                payment_objs = []
+                for pd in payments_data:
+                    try:
+                        pa = Decimal(str(pd.get("paying_amount") or 0))
+                    except Exception:
+                        pa = Decimal("0")
+                    payment_objs.append(
+                        SalesReturnPayment(
+                            sales_return=sr,
+                            paying_date=pd.get("paying_date") or sr.date,
+                            paying_amount=pa,
+                        )
+                    )
+                SalesReturnPayment.objects.bulk_create(payment_objs)
+
+        out = SalesReturnDetailSerializer(sr).data
         return Response(out, status=status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop("partial", False)
         instance = self.get_object()
-        products_list = self._get_products_payload(request)
-        payload = self._build_request_data_for_serializer(request, products_list)
+        products_list = self._get_json_payload(request, "products")
+        payments_list = self._get_json_payload(request, "payments_data")
+        payload = self._build_request_data_for_serializer(request, products_list, payments_list)
         serializer = self.get_serializer(instance, data=payload, partial=partial)
         serializer.is_valid(raise_exception=True)
         validated = serializer.validated_data
         items_data = validated.pop("products", None)
+        payments_data = validated.pop("payments_data", None)
 
         with transaction.atomic():
             for field, value in validated.items():
@@ -362,10 +354,27 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                 instance.items.all().delete()
                 new_items = self._build_items(items_data)
                 for it in new_items:
-                    it.order = instance
-                SalesOrderItem.objects.bulk_create(new_items)
+                    it.sales_return = instance
+                SalesReturnItem.objects.bulk_create(new_items)
 
-        out = SalesOrderDetailSerializer(instance).data
+            if payments_data is not None:
+                instance.payments.all().delete()
+                payment_objs = []
+                for pd in payments_data:
+                    try:
+                        pa = Decimal(str(pd.get("paying_amount") or 0))
+                    except Exception:
+                        pa = Decimal("0")
+                    payment_objs.append(
+                        SalesReturnPayment(
+                            sales_return=instance,
+                            paying_date=pd.get("paying_date") or instance.date,
+                            paying_amount=pa,
+                        )
+                    )
+                SalesReturnPayment.objects.bulk_create(payment_objs)
+
+        out = SalesReturnDetailSerializer(instance).data
         return Response(out)
 
     def perform_destroy(self, instance):
@@ -373,41 +382,27 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         if not is_unrestricted_user(user):
             ids = get_company_ids_for_user(user)
             if not ids or str(instance.companyId_id) not in [str(i) for i in ids]:
-                raise PermissionDenied("You cannot delete this order")
+                raise PermissionDenied("You cannot delete this sales return")
         instance.delete()
 
-    # ---- actions ----
     @action(detail=False, methods=["get"], url_path="options")
     def options(self, request):
-        """Return dropdown options scoped to current company."""
-
         def apply_scope(qs):
             return apply_company_branch_scope(
-                request=request,
-                queryset=qs,
-                company_id_field="companyId_id",
-                branch_id_field=None,
+                request=request, queryset=qs,
+                company_id_field="companyId_id", branch_id_field=None,
             )
 
         customers = apply_scope(Customer.objects.all()).order_by("name")
         currencies = apply_scope(Currency.objects.filter(is_active=True)).order_by("code")
-        users_qs = apply_scope(
-            UserModel.objects.all()
-        ).order_by("fullName", "name", "username")
-        financial_years = apply_scope(
-            FinancialYear.objects.all()
-        ).order_by("-from_date")
-        products_qs = apply_scope(
-            Product.objects.all()
-        ).prefetch_related(
-            "unit_prices",
-            "unit_prices__measuring_unit",
-            "units",
-            "units__unit",
+        users_qs = apply_scope(UserModel.objects.all()).order_by("fullName", "name", "username")
+        financial_years = apply_scope(FinancialYear.objects.all()).order_by("-from_date")
+        bank_accounts = apply_scope(BankAccount.objects.filter(is_active=True)).order_by("name")
+        products_qs = apply_scope(Product.objects.all()).prefetch_related(
+            "unit_prices", "unit_prices__measuring_unit",
+            "units", "units__unit",
         )
-        units_qs = apply_scope(
-            Unit.objects.filter(status=True)
-        ).order_by("name")
+        units_qs = apply_scope(Unit.objects.filter(status=True)).order_by("name")
 
         def user_label(u):
             return u.fullName or u.name or u.username or u.email or ""
@@ -418,65 +413,44 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
             for up in p.unit_prices.all():
                 if up.measuring_unit is None:
                     continue
-                unit_prices.append(
-                    {
-                        "unit_id": up.measuring_unit_id,
-                        "unit_name": up.measuring_unit.name,
-                        "sales_price": str(up.sales_price or 0),
-                        "purchase_price": str(up.purchase_price or 0),
-                    }
-                )
+                unit_prices.append({
+                    "unit_id": up.measuring_unit_id,
+                    "unit_name": up.measuring_unit.name,
+                    "sales_price": str(up.sales_price or 0),
+                    "purchase_price": str(up.purchase_price or 0),
+                })
             product_units = []
             for pu in p.units.all():
                 if pu.unit is None:
                     continue
-                product_units.append(
-                    {
-                        "unit_id": pu.unit_id,
-                        "unit_name": pu.unit.name,
-                        "is_default_selling": bool(pu.is_default_selling),
-                        "is_selling_unit": bool(pu.is_selling_unit),
-                        "is_default": bool(pu.is_default),
-                        "conversion_to_base": str(pu.conversion_to_base or 1),
-                    }
-                )
-            products_payload.append(
-                {
-                    "id": str(p.id),
-                    "name": p.name,
-                    "code": p.code,
-                    "is_multiple_unit_enabled": bool(
-                        getattr(p, "is_multiple_unit_enabled", False)
-                    ),
-                    "selling_unit_id": getattr(p, "selling_unit_id", None),
-                    "selling_unit_name": (
-                        p.selling_unit.name if p.selling_unit else None
-                    ),
-                    "default_rate": str(p.priceSale or p.price or 0),
-                    "is_tax_applied": bool(getattr(p, "is_tax_applied", False)),
-                    "tax_rate": str(getattr(p, "tax_rate", 0) or 0),
-                    "unit_prices": unit_prices,
-                    "product_units": product_units,
-                }
-            )
+                product_units.append({
+                    "unit_id": pu.unit_id,
+                    "unit_name": pu.unit.name,
+                    "is_default_selling": bool(pu.is_default_selling),
+                    "is_selling_unit": bool(pu.is_selling_unit),
+                    "is_default": bool(pu.is_default),
+                    "conversion_to_base": str(pu.conversion_to_base or 1),
+                })
+            products_payload.append({
+                "id": str(p.id),
+                "name": p.name,
+                "code": p.code,
+                "is_multiple_unit_enabled": bool(getattr(p, "is_multiple_unit_enabled", False)),
+                "selling_unit_id": getattr(p, "selling_unit_id", None),
+                "selling_unit_name": p.selling_unit.name if p.selling_unit else None,
+                "default_rate": str(p.priceSale or p.price or 0),
+                "is_tax_applied": bool(getattr(p, "is_tax_applied", False)),
+                "tax_rate": str(getattr(p, "tax_rate", 0) or 0),
+                "unit_prices": unit_prices,
+                "product_units": product_units,
+            })
 
-        return Response(
-            {
-                "customers": [
-                    {"id": str(c.id), "name": c.name}
-                    for c in customers
-                ],
-                "currencies": CurrencySerializer(currencies, many=True).data,
-                "users": [
-                    {"id": u.id, "name": user_label(u)}
-                    for u in users_qs
-                ],
-                "financial_years": [
-                    {"id": fy.id, "name": fy.name} for fy in financial_years
-                ],
-                "products": products_payload,
-                "units": [
-                    {"id": u.id, "name": u.name} for u in units_qs
-                ],
-            }
-        )
+        return Response({
+            "customers": [{"id": str(c.id), "name": c.name} for c in customers],
+            "currencies": CurrencySerializer(currencies, many=True).data,
+            "users": [{"id": u.id, "name": user_label(u)} for u in users_qs],
+            "financial_years": [{"id": fy.id, "name": fy.name} for fy in financial_years],
+            "bank_accounts": [{"id": str(ba.id), "name": ba.name} for ba in bank_accounts],
+            "products": products_payload,
+            "units": [{"id": u.id, "name": u.name} for u in units_qs],
+        })

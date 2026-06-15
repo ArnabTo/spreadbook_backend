@@ -19,6 +19,7 @@ from common.drf_scoping import (
     get_company_ids_for_user,
     is_unrestricted_user,
 )
+from banking.models import BankAccount
 from customers.models import Customer
 from financial_years.models import FinancialYear
 from prefixes.models import Prefix
@@ -26,26 +27,21 @@ from products.models import Product, Unit
 from sales_quotation.models import Currency
 from sales_quotation.serializers import CurrencySerializer
 
-from .models import SalesOrder, SalesOrderItem
+from .models import SalesInvoice, SalesInvoiceItem
 from .serializers import (
-    SalesOrderDetailSerializer,
-    SalesOrderItemSerializer,
-    SalesOrderListSerializer,
-    SalesOrderWriteSerializer,
+    SalesInvoiceDetailSerializer,
+    SalesInvoiceItemSerializer,
+    SalesInvoiceListSerializer,
+    SalesInvoiceWriteSerializer,
 )
 
 
 def _generate_bill_number(company, financial_year=None) -> str:
-    """Generate the next sales order number atomically using the Prefix system.
-
-    Falls back to SO-<n> within the company if no Prefix record exists.
-    """
-
     if not company:
         return ""
 
     qs = Prefix.objects.filter(
-        company=company, type="sales_order", applicable=True
+        company=company, type="sales_invoice", applicable=True
     )
     if financial_year is not None:
         qs = qs.filter(financial_year=financial_year)
@@ -56,7 +52,7 @@ def _generate_bill_number(company, financial_year=None) -> str:
         prefix_obj = qs.select_for_update().order_by("id").first()
         if prefix_obj is None:
             last_qs = (
-                SalesOrder.objects.filter(companyId=company)
+                SalesInvoice.objects.filter(companyId=company)
                 .order_by("-created_at")
                 .values_list("bill_number", flat=True)
             )
@@ -68,7 +64,7 @@ def _generate_bill_number(company, financial_year=None) -> str:
                     next_index = int("".join(ch for ch in tail if ch.isdigit())) + 1
                 except (ValueError, IndexError):
                     next_index = 100
-            return f"SO-{next_index}"
+            return f"SI-{next_index}"
 
         Prefix.objects.filter(pk=prefix_obj.pk).update(
             current_index=F("current_index") + 1
@@ -83,7 +79,7 @@ def _generate_bill_number(company, financial_year=None) -> str:
         return f"{prefix_obj.prefix}{sep}{new_index:0{width}d}"
 
 
-class SalesOrderPageNumberPagination(PageNumberPagination):
+class SalesInvoicePageNumberPagination(PageNumberPagination):
     page_size = 10
     page_size_query_param = "page_size"
     max_page_size = 100
@@ -104,29 +100,31 @@ class SalesOrderPageNumberPagination(PageNumberPagination):
         )
 
 
-class SalesOrderViewSet(viewsets.ModelViewSet):
+class SalesInvoiceViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
-    pagination_class = SalesOrderPageNumberPagination
+    pagination_class = SalesInvoicePageNumberPagination
 
     def get_serializer_class(self):
         if self.action in ("create", "update", "partial_update"):
-            return SalesOrderWriteSerializer
+            return SalesInvoiceWriteSerializer
         if self.action == "retrieve":
-            return SalesOrderDetailSerializer
-        return SalesOrderListSerializer
+            return SalesInvoiceDetailSerializer
+        return SalesInvoiceListSerializer
 
     def get_queryset(self):
         qs = (
-            SalesOrder.objects.select_related(
+            SalesInvoice.objects.select_related(
                 "customer",
                 "currency",
                 "sales_person",
+                "branch",
+                "bank_account",
             )
             .prefetch_related(
                 Prefetch(
                     "items",
-                    queryset=SalesOrderItem.objects.select_related(
+                    queryset=SalesInvoiceItem.objects.select_related(
                         "product", "unit"
                     ),
                 )
@@ -143,6 +141,9 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         bill_number = params.get("bill_number")
         if bill_number:
             qs = qs.filter(bill_number__icontains=bill_number)
+        product = params.get("product")
+        if product:
+            qs = qs.filter(items__product_id=product).distinct()
         customer_id = params.get("customer")
         if customer_id:
             qs = qs.filter(customer_id=customer_id)
@@ -158,6 +159,27 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         salesperson = params.get("sales_person")
         if salesperson:
             qs = qs.filter(sales_person_id=salesperson)
+        grand_total = params.get("grand_total")
+        if grand_total:
+            qs = qs.filter(grand_total=grand_total)
+        so_ref = params.get("so_ref")
+        if so_ref:
+            qs = qs.filter(so_ref__icontains=so_ref)
+        due_date_from = params.get("due_date_from")
+        if due_date_from:
+            qs = qs.filter(due_date__gte=due_date_from)
+        due_date_to = params.get("due_date_to")
+        if due_date_to:
+            qs = qs.filter(due_date__lte=due_date_to)
+        site_name = params.get("site_name")
+        if site_name:
+            qs = qs.filter(branch__name__icontains=site_name)
+        hide_draft = params.get("hide_draft")
+        if hide_draft and hide_draft.lower() in ("1", "true", "yes"):
+            qs = qs.exclude(bill_status="Draft")
+        hide_approved = params.get("hide_approved")
+        if hide_approved and hide_approved.lower() in ("1", "true", "yes"):
+            qs = qs.exclude(bill_status="Approved")
         return qs.order_by("-date", "-created_at")
 
     # ---- write helpers ----
@@ -225,7 +247,7 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
             tax_amount = (amount * tax_percent) / Decimal("100")
             total = amount + tax_amount
             objects.append(
-                SalesOrderItem(
+                SalesInvoiceItem(
                     product=product,
                     unit=unit,
                     qty=qty,
@@ -241,7 +263,7 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
             )
         return objects
 
-    def _recalc_totals(self, order: SalesOrder, items_data):
+    def _recalc_totals(self, invoice: SalesInvoice, items_data):
         items = self._build_items(items_data)
         total = sum((i.amount for i in items), Decimal("0"))
         tax_total = sum((i.tax_amount for i in items), Decimal("0"))
@@ -250,15 +272,28 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
             cash_discount_total = Decimal(str(self.request.data.get("cash_discount_total") or 0))
         except Exception:
             cash_discount_total = Decimal("0")
-        grand_total = total + tax_total - product_discount_total - cash_discount_total
-        order.total = total
-        order.tax_total = tax_total
-        order.product_discount_total = product_discount_total
-        order.cash_discount_total = cash_discount_total
-        order.grand_total = grand_total
+        try:
+            discount = Decimal(str(self.request.data.get("discount") or 0))
+        except Exception:
+            discount = Decimal("0")
+        try:
+            paid_amount = Decimal(str(self.request.data.get("paid_amount") or 0))
+        except Exception:
+            paid_amount = Decimal("0")
+        grand_total = total + tax_total - product_discount_total - cash_discount_total - discount
+        pending_amount = grand_total - paid_amount
+        if pending_amount < 0:
+            pending_amount = Decimal("0")
+        invoice.total = total
+        invoice.tax_total = tax_total
+        invoice.product_discount_total = product_discount_total
+        invoice.cash_discount_total = cash_discount_total
+        invoice.discount = discount
+        invoice.paid_amount = paid_amount
+        invoice.pending_amount = pending_amount
+        invoice.grand_total = grand_total
         return items
 
-    # ---- create / update ----
     def _get_products_payload(self, request):
         products = None
         try:
@@ -316,24 +351,24 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                     .first()
                 )
 
-            order = SalesOrder(companyId=company, branch=branch, user=user)
+            invoice = SalesInvoice(companyId=company, branch=branch, user=user)
             for field, value in validated.items():
                 if field in ("attachment",):
                     continue
-                setattr(order, field, value)
+                setattr(invoice, field, value)
             attachment = request.FILES.get("attachment")
             if attachment is not None:
-                order.attachment = attachment
-            order.bill_number = _generate_bill_number(company, fy)
-            order.financial_year = fy
-            item_objs = self._recalc_totals(order, items_data)
-            order.save()
+                invoice.attachment = attachment
+            invoice.bill_number = _generate_bill_number(company, fy)
+            invoice.financial_year = fy
+            item_objs = self._recalc_totals(invoice, items_data)
+            invoice.save()
 
             for item in item_objs:
-                item.order = order
-            SalesOrderItem.objects.bulk_create(item_objs)
+                item.invoice = invoice
+            SalesInvoiceItem.objects.bulk_create(item_objs)
 
-        out = SalesOrderDetailSerializer(order).data
+        out = SalesInvoiceDetailSerializer(invoice).data
         return Response(out, status=status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
@@ -362,10 +397,10 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                 instance.items.all().delete()
                 new_items = self._build_items(items_data)
                 for it in new_items:
-                    it.order = instance
-                SalesOrderItem.objects.bulk_create(new_items)
+                    it.invoice = instance
+                SalesInvoiceItem.objects.bulk_create(new_items)
 
-        out = SalesOrderDetailSerializer(instance).data
+        out = SalesInvoiceDetailSerializer(instance).data
         return Response(out)
 
     def perform_destroy(self, instance):
@@ -373,14 +408,11 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         if not is_unrestricted_user(user):
             ids = get_company_ids_for_user(user)
             if not ids or str(instance.companyId_id) not in [str(i) for i in ids]:
-                raise PermissionDenied("You cannot delete this order")
+                raise PermissionDenied("You cannot delete this invoice")
         instance.delete()
 
-    # ---- actions ----
     @action(detail=False, methods=["get"], url_path="options")
     def options(self, request):
-        """Return dropdown options scoped to current company."""
-
         def apply_scope(qs):
             return apply_company_branch_scope(
                 request=request,
@@ -394,6 +426,9 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         users_qs = apply_scope(
             UserModel.objects.all()
         ).order_by("fullName", "name", "username")
+        bank_accounts = apply_scope(
+            BankAccount.objects.filter(is_active=True)
+        ).order_by("name")
         financial_years = apply_scope(
             FinancialYear.objects.all()
         ).order_by("-from_date")
@@ -473,6 +508,9 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                 ],
                 "financial_years": [
                     {"id": fy.id, "name": fy.name} for fy in financial_years
+                ],
+                "bank_accounts": [
+                    {"id": ba.id, "name": ba.name} for ba in bank_accounts
                 ],
                 "products": products_payload,
                 "units": [

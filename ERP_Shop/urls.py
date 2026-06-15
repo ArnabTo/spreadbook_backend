@@ -33,6 +33,10 @@ from sales import urls as Sales
 from sales_quotation import urls as SalesQuotation
 from sales_order import urls as SalesOrder
 from delivery_note import urls as DeliveryNote
+from sales_invoice import urls as SalesInvoice
+from proforma_invoice import urls as ProformaInvoice
+from sales_return import urls as SalesReturn
+from banking import urls as Banking
 from review import urls as PeopleReview
 from products import urls as Product
 from order import urls as Orders
@@ -89,6 +93,10 @@ urlpatterns = [
     path("", include(SalesQuotation)),
     path("", include(SalesOrder)),
     path("", include(DeliveryNote)),
+    path("", include(SalesInvoice)),
+    path("", include(ProformaInvoice)),
+    path("", include(SalesReturn)),
+    path("", include(Banking)),
     path("", include(Service)),
     path("", include(Suppliers)),
     path("", include(TableManagement)),

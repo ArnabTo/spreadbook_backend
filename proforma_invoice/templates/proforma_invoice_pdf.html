@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Proforma Invoice - {{ invoice.bill_number }}</title>
+<style>
+@page {
+    size: A4;
+    margin: 0.4in;
+}
+body {
+    font-family: 'Helvetica', 'Arial', sans-serif;
+    font-size: 8pt;
+    line-height: 1.3;
+    color: #1e1d1d;
+    margin: 0;
+    padding: 0;
+}
+.title-bar {
+    text-align: center;
+    background: #1e1d1d;
+    color: #fff;
+    padding: 6px 0;
+    font-size: 11pt;
+    font-weight: 700;
+    letter-spacing: 1pt;
+    margin-bottom: 8px;
+}
+.title-bar-ar {
+    text-align: center;
+    font-size: 9pt;
+    direction: rtl;
+}
+.info-line {
+    text-align: center;
+    font-size: 8pt;
+    margin-bottom: 10px;
+}
+.info-line span {
+    margin: 0 12px;
+}
+.party-section {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 6px;
+}
+.party-section td {
+    width: 50%;
+    vertical-align: top;
+    font-size: 7.5pt;
+    padding: 1px 4px;
+}
+.party-label {
+    font-weight: 700;
+    font-size: 7.5pt;
+}
+.party-name {
+    font-weight: 700;
+    font-size: 8pt;
+}
+.meta-row {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 4px;
+}
+.meta-row td {
+    border: 1px solid #000;
+    padding: 2px 4px;
+    font-size: 7pt;
+    text-align: center;
+    vertical-align: top;
+}
+.meta-row .label {
+    font-weight: 700;
+    font-size: 6.5pt;
+    background: #f0f0f0;
+    border-bottom: none;
+}
+.meta-row .value {
+    font-size: 7pt;
+    border-top: none;
+}
+.col-header {
+    display: flex;
+}
+.items-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 6px;
+}
+.items-table th {
+    border: 1px solid #000;
+    padding: 3px 2px;
+    font-size: 6.5pt;
+    font-weight: 700;
+    text-align: center;
+    background: #e8e8e8;
+}
+.items-table td {
+    border: 1px solid #000;
+    padding: 2px 3px;
+    font-size: 7pt;
+    text-align: center;
+}
+.items-table .left { text-align: left; }
+.items-table .right { text-align: right; }
+.totals-section {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 6px;
+}
+.totals-section td {
+    border: 1px solid #000;
+    padding: 3px 6px;
+    font-size: 8pt;
+}
+.totals-section .label {
+    font-weight: 700;
+    text-align: right;
+    width: 70%;
+}
+.totals-section .val {
+    text-align: right;
+    font-weight: 700;
+    width: 30%;
+}
+.totals-section .grand-label {
+    background: #1e1d1d;
+    color: #fff;
+    font-size: 9pt;
+}
+.totals-section .grand-val {
+    background: #1e1d1d;
+    color: #fff;
+    font-size: 9pt;
+}
+.words {
+    font-size: 7pt;
+    margin: 4px 0;
+    padding: 2px 4px;
+    border: 1px solid #000;
+}
+.bank-section {
+    margin: 6px 0;
+}
+.bank-title {
+    font-weight: 700;
+    font-size: 7.5pt;
+    background: #e8e8e8;
+    padding: 2px 4px;
+    border: 1px solid #000;
+    border-bottom: none;
+}
+.bank-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+.bank-table td {
+    border: 1px solid #000;
+    padding: 2px 4px;
+    font-size: 7pt;
+}
+.bank-table .blabel {
+    font-weight: 700;
+    width: 25%;
+}
+.bank-table .bval {
+    width: 25%;
+}
+.footer-section {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 8px;
+}
+.footer-section td {
+    border: 1px solid #000;
+    padding: 4px 6px;
+    font-size: 7pt;
+    text-align: center;
+    vertical-align: top;
+    height: 40px;
+}
+.footer-section .flabel {
+    font-weight: 700;
+    font-size: 6.5pt;
+}
+</style>
+</head>
+<body>
+
+<div class="title-bar">SALES ESTIMATION / تقدير المبيعات</div>
+
+<div class="info-line">
+    <span>Invoice No : <strong>{{ invoice.bill_number }}</strong></span>
+    <span>رقم الفاتورة : <strong>{{ invoice.bill_number }}</strong></span>
+</div>
+
+<table class="party-section">
+<tr>
+    <td>
+        <div class="party-label">From</div>
+        {% if company %}
+        <div class="party-name">{{ company.name|default:"—" }}</div>
+        <div>Address : {{ company.fullAddress|default:"—" }}</div>
+        {% if company.email %}<div>Email : {{ company.email }}</div>{% endif %}
+        {% if company.phoneNumber %}<div>Phone : {{ company.phoneNumber }}</div>{% endif %}
+        {% if company.cr_number_en %}<div>CR No : {{ company.cr_number_en }}</div>{% endif %}
+        {% if customization.taxRate %}<div>VAT : {{ customization.taxRate }}%</div>{% endif %}
+        {% else %}
+        <div class="party-name">—</div>
+        {% endif %}
+    </td>
+    <td style="direction:rtl; text-align:right;">
+        <div class="party-label">إلى</div>
+        {% if invoice.customer %}
+        <div class="party-name">{{ invoice.customer.arabic_name|default:"—" }}</div>
+        {% else %}
+        <div class="party-name">—</div>
+        {% endif %}
+    </td>
+</tr>
+<tr>
+    <td></td>
+    <td style="text-align:left; direction:ltr;">
+        <div class="party-label">To</div>
+        {% if invoice.customer %}
+        <div class="party-name">{{ invoice.customer.name|default:"—" }}</div>
+        <div>Address : {{ invoice.customer.address|default:"—" }}</div>
+        {% if invoice.customer.phoneNumber %}<div>Phone : {{ invoice.customer.phoneNumber }}</div>{% endif %}
+        {% if invoice.customer.email %}<div>Email : {{ invoice.customer.email }}</div>{% endif %}
+        {% if invoice.customer.vat_no %}<div>VAT : {{ invoice.customer.vat_no }}</div>{% endif %}
+        {% if invoice.customer.cr_number %}<div>CR No : {{ invoice.customer.cr_number }}</div>{% endif %}
+        {% else %}
+        <div class="party-name">—</div>
+        {% endif %}
+    </td>
+</tr>
+</table>
+
+<table class="meta-row">
+<tr>
+    <td class="label">Invoice Date<br/>تاريخ الفاتورة</td>
+    <td class="label">Supply Date<br/>تاريخ التوريد</td>
+    <td class="label">Contract / PO No<br/>رقم أمر الشراء</td>
+    <td class="label">Due Date<br/>تاريخ الاستحقاق</td>
+    <td class="label">Invoice Period<br/>فترة الفاتورة</td>
+    <td class="label">Project / Reference No<br/>رقم المشروع / المرجع</td>
+</tr>
+<tr>
+    <td class="value">{{ invoice.date|date:"d/m/Y" }}</td>
+    <td class="value">{% if invoice.supply_date %}{{ invoice.supply_date|date:"d/m/Y" }}{% else %}—{% endif %}</td>
+    <td class="value">{{ invoice.po_ref|default:"—" }}</td>
+    <td class="value">{% if invoice.due_date %}{{ invoice.due_date|date:"d/m/Y" }}{% else %}—{% endif %}</td>
+    <td class="value">{{ invoice.invoice_period|default:"—" }}</td>
+    <td class="value">{{ invoice.project_ref_no|default:"—" }}</td>
+</tr>
+</table>
+
+<table class="items-table" repeat="1">
+<thead>
+<tr>
+    <th width="3%">#</th>
+    <th width="7%">Code<br/>الكود</th>
+    <th width="22%" class="left">Description<br/>الوصف</th>
+    <th width="7%">Unit<br/>الوحدة</th>
+    <th width="7%">Qty<br/>الكمية</th>
+    <th width="9%">Rate<br/>السعر</th>
+    <th width="13%">Total Price<br/>excl. VAT</th>
+    <th width="7%">Vat %<br/>% الضريبة</th>
+    <th width="11%">VAT Amount<br/>قيمة الضريبة</th>
+    <th width="14%" class="right">Total<br/>الإجمالي</th>
+</tr>
+</thead>
+<tbody>
+{% for item in invoice.items.all %}
+<tr>
+    <td>{{ forloop.counter }}</td>
+    <td>{% if item.product %}{{ item.product.code|default:"" }}{% else %}—{% endif %}</td>
+    <td class="left">{% if item.product %}{{ item.product.name }}{% else %}—{% endif %}</td>
+    <td>{% if item.unit %}{{ item.unit.name }}{% else %}—{% endif %}</td>
+    <td>{{ item.qty|floatformat:2 }}</td>
+    <td class="right">{{ item.rate|floatformat:2 }}</td>
+    <td class="right">{{ item.amount|floatformat:2 }}</td>
+    <td>{{ item.tax_percent|floatformat:2 }}</td>
+    <td class="right">{{ item.tax_amount|floatformat:2 }}</td>
+    <td class="right">{{ item.total|floatformat:2 }}</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+
+<table class="totals-section">
+<tr>
+    <td class="label">Total / الإجمالي</td>
+    <td class="val">{{ invoice.total|floatformat:2 }} {% if invoice.currency %}{{ invoice.currency.code }}{% endif %}</td>
+</tr>
+<tr>
+    <td class="label">VAT / القيمة المضافة</td>
+    <td class="val">{{ invoice.tax_total|floatformat:2 }} {% if invoice.currency %}{{ invoice.currency.code }}{% endif %}</td>
+</tr>
+{% if invoice.discount %}
+<tr>
+    <td class="label">Discount / الخصم</td>
+    <td class="val">({{ invoice.discount|floatformat:2 }}) {% if invoice.currency %}{{ invoice.currency.code }}{% endif %}</td>
+</tr>
+{% endif %}
+<tr>
+    <td class="label grand-label">Grand Total / الإجمالي الكلي</td>
+    <td class="val grand-val">{{ invoice.grand_total|floatformat:2 }} {% if invoice.currency %}{{ invoice.currency.code }}{% endif %}</td>
+</tr>
+<tr>
+    <td class="label">Balance Due / الرصيد المستحق</td>
+    <td class="val">{{ invoice.grand_total|floatformat:2 }} {% if invoice.currency %}{{ invoice.currency.code }}{% endif %}</td>
+</tr>
+</table>
+
+<div class="words">
+    <strong>Amount In Words:</strong> {{ invoice.grand_total|floatformat:2 }} {% if invoice.currency %}{{ invoice.currency.name|default:invoice.currency.code }}{% endif %}
+</div>
+
+{% if invoice.bank_account %}
+<div class="bank-section">
+    <div class="bank-title">BANK DETAILS / التفاصيل المصرفية</div>
+    <table class="bank-table">
+        <tr>
+            <td class="blabel">Account Name</td>
+            <td class="bval">{{ invoice.bank_account.name }}</td>
+            <td class="blabel">اسم الحساب</td>
+            <td class="bval">{{ invoice.bank_account.name }}</td>
+        </tr>
+        <tr>
+            <td class="blabel">Bank Name</td>
+            <td class="bval">{{ invoice.bank_account.bank_name|default:"—" }}</td>
+            <td class="blabel">اسم البنك</td>
+            <td class="bval">{{ invoice.bank_account.bank_name|default:"—" }}</td>
+        </tr>
+        <tr>
+            <td class="blabel">Account No</td>
+            <td class="bval">{{ invoice.bank_account.account_number|default:"—" }}</td>
+            <td class="blabel">رقم الحساب</td>
+            <td class="bval">{{ invoice.bank_account.account_number|default:"—" }}</td>
+        </tr>
+        {% if invoice.bank_account.iban %}
+        <tr>
+            <td class="blabel">IBAN</td>
+            <td class="bval">{{ invoice.bank_account.iban }}</td>
+            <td class="blabel">الأيبان</td>
+            <td class="bval">{{ invoice.bank_account.iban }}</td>
+        </tr>
+        {% endif %}
+        {% if invoice.bank_account.swift_code %}
+        <tr>
+            <td class="blabel">Swift Code</td>
+            <td class="bval">{{ invoice.bank_account.swift_code }}</td>
+            <td class="blabel">رمز السويفت</td>
+            <td class="bval">{{ invoice.bank_account.swift_code }}</td>
+        </tr>
+        {% endif %}
+    </table>
+</div>
+{% endif %}
+
+<table class="footer-section">
+<tr>
+    <td width="25%">
+        <div class="flabel">Prepared By / إعداد</div>
+        {% if invoice.sales_person %}{{ invoice.sales_person.fullName|default:invoice.sales_person.name }}{% else %}—{% endif %}
+    </td>
+    <td width="25%">
+        <div class="flabel">Signature/Stamp<br/>التوقيع / الختم</div>
+    </td>
+    <td width="25%">
+        <div class="flabel">QR Code</div>
+    </td>
+    <td width="25%">
+        <div class="flabel">Invoice Received By / استلمت</div>
+        <br/>
+        <div class="flabel" style="margin-top:8px;">Signature/Stamp</div>
+    </td>
+</tr>
+</table>
+
+</body>
+</html>

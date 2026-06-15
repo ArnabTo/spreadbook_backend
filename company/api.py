@@ -762,22 +762,30 @@ class CompanyCustomizationViewSet(viewsets.ModelViewSet):
 
 
 
-class CountryViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = Country.objects.filter(is_active=True).order_by("name")
+class CountryViewSet(viewsets.ModelViewSet):
+    queryset = Country.objects.all().order_by("name")
     serializer_class = CountrySerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    def perform_destroy(self, instance):
+        instance.is_active = False
+        instance.save()
 
-class StateProvinceViewSet(viewsets.ReadOnlyModelViewSet):
+
+class StateProvinceViewSet(viewsets.ModelViewSet):
     serializer_class = StateProvinceSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        qs = StateProvince.objects.filter(is_active=True).select_related("country").order_by("name")
+        qs = StateProvince.objects.select_related("country").order_by("country__name", "name")
         country_id = self.request.query_params.get("country_id")
         if country_id:
             qs = qs.filter(country_id=country_id)
         return qs
+
+    def perform_destroy(self, instance):
+        instance.is_active = False
+        instance.save()
 
 
 class WarehouseViewSet(viewsets.ModelViewSet):
