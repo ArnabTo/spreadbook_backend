@@ -31,6 +31,8 @@ from customers import urls as Customer
 from service import urls as Service
 from sales import urls as Sales
 from sales_quotation import urls as SalesQuotation
+from sales_order import urls as SalesOrder
+from delivery_note import urls as DeliveryNote
 from review import urls as PeopleReview
 from products import urls as Product
 from order import urls as Orders
@@ -85,6 +87,8 @@ urlpatterns = [
     path("", include(Pharmacy)),
     path("", include(Sales)),
     path("", include(SalesQuotation)),
+    path("", include(SalesOrder)),
+    path("", include(DeliveryNote)),
     path("", include(Service)),
     path("", include(Suppliers)),
     path("", include(TableManagement)),

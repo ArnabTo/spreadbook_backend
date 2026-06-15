@@ -315,6 +315,8 @@ LOCAL_APPS = [
     "review.apps.ReviewConfig",
     "sales.apps.SalesConfig",
     "sales_quotation.apps.SalesQuotationConfig",
+    "sales_order.apps.SalesOrderConfig",
+    "delivery_note.apps.DeliveryNoteConfig",
     "service.apps.ServiceConfig",
     "settings.apps.SettingsConfig",
     "staff.apps.StaffConfig",
