@@ -1,5 +1,7 @@
 import json
 
+from decimal import Decimal
+
 from rest_framework import serializers
 
 from .models import SalesInvoice, SalesInvoiceItem
@@ -334,3 +336,21 @@ class SalesInvoiceWriteSerializer(serializers.ModelSerializer):
                 {"sales_person": "Sales Person is required."}
             )
         return attrs
+
+
+class SalesInvoiceRegistrySerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    date = serializers.DateField()
+    bill_number = serializers.CharField()
+    customer_name = serializers.CharField()
+    party_invoice_number = serializers.CharField()
+    product_name = serializers.CharField()
+    unit_name = serializers.CharField()
+    quantity = serializers.DecimalField(max_digits=18, decimal_places=2)
+    mrp = serializers.DecimalField(max_digits=18, decimal_places=2)
+    cost = serializers.DecimalField(max_digits=18, decimal_places=2)
+    amount = serializers.DecimalField(max_digits=18, decimal_places=2)
+    total_cost = serializers.DecimalField(max_digits=18, decimal_places=2)
+    discount_percent = serializers.DecimalField(max_digits=5, decimal_places=2)
+    tax_total = serializers.DecimalField(max_digits=18, decimal_places=2)
+    total_amount = serializers.DecimalField(max_digits=18, decimal_places=2)

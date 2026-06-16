@@ -12,6 +12,8 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from django.http import HttpResponse
+from decimal import Decimal
 
 from authenticator.models import User as UserModel
 from common.drf_scoping import (
@@ -32,6 +34,7 @@ from .serializers import (
     SalesInvoiceDetailSerializer,
     SalesInvoiceItemSerializer,
     SalesInvoiceListSerializer,
+    SalesInvoiceRegistrySerializer,
     SalesInvoiceWriteSerializer,
 )
 
@@ -518,3 +521,168 @@ class SalesInvoiceViewSet(viewsets.ModelViewSet):
                 ],
             }
         )
+
+
+class SalesInvoiceRegistryPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = "page_size"
+    max_page_size = 200
+
+    def get_paginated_response(self, data):
+        return Response(
+            {
+                "count": self.page.paginator.count,
+                "total_pages": self.page.paginator.num_pages,
+                "current_page": self.page.number,
+                "page_size": self.get_page_size(self.request),
+                "results": data,
+            }
+        )
+
+
+class SalesInvoiceRegistryViewSet(viewsets.ReadOnlyModelViewSet):
+    permission_classes = [IsAuthenticated]
+    serializer_class = SalesInvoiceRegistrySerializer
+    pagination_class = SalesInvoiceRegistryPagination
+
+    def get_queryset(self):
+        qs = (
+            SalesInvoiceItem.objects.select_related(
+                "invoice",
+                "invoice__customer",
+                "product",
+                "unit",
+            )
+            .all()
+        )
+        qs = apply_company_branch_scope(
+            request=self.request,
+            queryset=qs,
+            company_id_field="invoice__companyId_id",
+            branch_id_field="invoice__branch_id",
+        )
+        params = self.request.query_params
+        date_from = params.get("date_from")
+        if date_from:
+            qs = qs.filter(invoice__date__gte=date_from)
+        date_to = params.get("date_to")
+        if date_to:
+            qs = qs.filter(invoice__date__lte=date_to)
+        bill_number = params.get("bill_number")
+        if bill_number:
+            qs = qs.filter(invoice__bill_number__icontains=bill_number)
+        customer_id = params.get("customer")
+        if customer_id:
+            qs = qs.filter(invoice__customer_id=customer_id)
+        product_id = params.get("product")
+        if product_id:
+            qs = qs.filter(product_id=product_id)
+        sales_person_id = params.get("sales_person")
+        if sales_person_id:
+            qs = qs.filter(invoice__sales_person_id=sales_person_id)
+        tax_percent = params.get("tax_percent")
+        if tax_percent:
+            qs = qs.filter(tax_percent=tax_percent)
+        total_amount_min = params.get("total_amount_min")
+        if total_amount_min:
+            qs = qs.filter(total__gte=total_amount_min)
+        total_amount_max = params.get("total_amount_max")
+        if total_amount_max:
+            qs = qs.filter(total__lte=total_amount_max)
+        billwithouttax = params.get("billwithouttax")
+        if billwithouttax and billwithouttax.lower() in ("1", "true", "yes"):
+            qs = qs.filter(tax_percent=Decimal("15"))
+        return qs.order_by("-invoice__date", "-invoice__created_at")
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            data = self._build_rows(page)
+            return self.get_paginated_response(data)
+        data = self._build_rows(queryset)
+        return Response(data)
+
+    def _build_rows(self, items):
+        rows = []
+        for item in items:
+            inv = item.invoice
+            product = item.product
+            qty = item.qty or Decimal("0")
+            rate = item.rate or Decimal("0")
+            product_total = qty * rate
+            discount_amt = item.discount_amount or Decimal("0")
+            discount_pct = Decimal("0")
+            if product_total > 0:
+                discount_pct = (discount_amt / product_total) * Decimal("100")
+            rows.append(
+                {
+                    "id": item.id,
+                    "date": inv.date,
+                    "bill_number": inv.bill_number,
+                    "customer_name": inv.customer.name if inv.customer else "",
+                    "party_invoice_number": inv.po_ref or "",
+                    "product_name": product.name if product else "",
+                    "unit_name": item.unit.name if item.unit else "",
+                    "quantity": qty,
+                    "mrp": product.mrp if product and product.mrp else Decimal("0"),
+                    "cost": rate,
+                    "amount": item.amount or Decimal("0"),
+                    "total_cost": product_total,
+                    "discount_percent": discount_pct,
+                    "tax_total": item.tax_amount or Decimal("0"),
+                    "total_amount": item.total or Decimal("0"),
+                }
+            )
+        return rows
+
+    @action(detail=False, methods=["get"])
+    def export(self, request):
+        queryset = self.filter_queryset(self.get_queryset())
+        items = queryset[:10000]
+        rows = self._build_rows(items)
+        import csv
+
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = (
+            'attachment; filename="sales_invoice_registry.csv"'
+        )
+        writer = csv.writer(response)
+        writer.writerow(
+            [
+                "Date",
+                "Bill Number",
+                "Customer",
+                "Party Invoice Number",
+                "Product",
+                "Unit",
+                "Quantity",
+                "MRP",
+                "Cost",
+                "Amount",
+                "Total Cost",
+                "Discount (%)",
+                "Tax Total",
+                "Total Amount",
+            ]
+        )
+        for row in rows:
+            writer.writerow(
+                [
+                    row["date"],
+                    row["bill_number"],
+                    row["customer_name"],
+                    row["party_invoice_number"],
+                    row["product_name"],
+                    row["unit_name"],
+                    str(row["quantity"]),
+                    str(row["mrp"]),
+                    str(row["cost"]),
+                    str(row["amount"]),
+                    str(row["total_cost"]),
+                    str(row["discount_percent"]),
+                    str(row["tax_total"]),
+                    str(row["total_amount"]),
+                ]
+            )
+        return response
