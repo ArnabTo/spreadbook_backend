@@ -25,7 +25,7 @@ from .models.product_model import (
     UnitConversionGroup,
     UnitConversionStep,
 )
-from .models import ProductType, GenericName, Brand, ProductBarcode, ProductBatch
+from .models import ProductType, GenericName, Brand, ProductBarcode, ProductBatch, ProductUnitPrice
 from .models.stock_transfer_model import StockTransfer, StockTransferItem
 from .models.unit_model import Unit
 from .pagination import ProductPagination
@@ -608,7 +608,11 @@ class ProductViewSet(viewsets.ModelViewSet):
                 Prefetch(
                     "units",
                     queryset=ProductUnit.objects.select_related("unit"),
-                )
+                ),
+                Prefetch(
+                    "unit_prices",
+                    queryset=ProductUnitPrice.objects.select_related("measuring_unit"),
+                ),
             )
             .all()
         )

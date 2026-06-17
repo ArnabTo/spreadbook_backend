@@ -574,6 +574,7 @@ def megashop_login(request):
             token_data = {"token": token.key, "token_type": "Token"}
 
         # Prepare user data (matching frontend User interface)
+        company_obj = user.companyId
         user_data = {
             "id": str(user.id),
             "username": user.username,
@@ -581,7 +582,16 @@ def megashop_login(request):
             "fullName": user.fullName or user.name,
             "role": user.role,
             "avatarUrl": user.avatarUrl.url if user.avatarUrl else None,
-            "companyId": user.companyId.id if user.companyId else None,
+            "companyId": company_obj.id if company_obj else None,
+            "company": {
+                "id": company_obj.id,
+                "name": company_obj.name or "",
+                "email": company_obj.email or "",
+                "phone": company_obj.phoneNumber or company_obj.phone or "",
+                "address": company_obj.fullAddress or company_obj.address or "",
+                "crNumber": company_obj.cr_number_en or "",
+                "logo": company_obj.logo.url if company_obj.logo else None,
+            } if company_obj else None,
             "resellerId": user.resellerId.id if user.resellerId else None,
             "branchAccess": (
                 list(user.branchAccess.values_list("id", flat=True))
@@ -622,6 +632,7 @@ def get_user_profile(request):
         )
 
     user = request.user
+    company_obj = user.companyId
     user_data = {
         "id": str(user.id),
         "username": user.username,
@@ -629,7 +640,16 @@ def get_user_profile(request):
         "fullName": user.fullName or user.name,
         "role": user.role,
         "avatarUrl": user.avatarUrl.url if user.avatarUrl else None,
-        "companyId": user.companyId.id if user.companyId else None,
+        "companyId": company_obj.id if company_obj else None,
+        "company": {
+            "id": company_obj.id,
+            "name": company_obj.name or "",
+            "email": company_obj.email or "",
+            "phone": company_obj.phoneNumber or company_obj.phone or "",
+            "address": company_obj.fullAddress or company_obj.address or "",
+            "crNumber": company_obj.cr_number_en or "",
+            "logo": company_obj.logo.url if company_obj.logo else None,
+        } if company_obj else None,
         "resellerId": user.resellerId.id if user.resellerId else None,
         "branchAccess": (
             list(user.branchAccess.values_list("id", flat=True))

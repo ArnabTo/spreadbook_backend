@@ -5,6 +5,7 @@ from decimal import Decimal
 
 from django.db import transaction
 from django.db.models import F, Prefetch
+from django.http import HttpResponse
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
@@ -31,6 +32,7 @@ from .serializers import (
     SalesOrderDetailSerializer,
     SalesOrderItemSerializer,
     SalesOrderListSerializer,
+    SalesOrderRegistrySerializer,
     SalesOrderWriteSerializer,
 )
 
@@ -480,3 +482,140 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                 ],
             }
         )
+
+
+class SalesOrderRegistryPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = "page_size"
+    max_page_size = 200
+
+    def get_paginated_response(self, data):
+        return Response(
+            {
+                "count": self.page.paginator.count,
+                "total_pages": self.page.paginator.num_pages,
+                "current_page": self.page.number,
+                "page_size": self.get_page_size(self.request),
+                "results": data,
+            }
+        )
+
+
+class SalesOrderRegistryViewSet(viewsets.ReadOnlyModelViewSet):
+    permission_classes = [IsAuthenticated]
+    serializer_class = SalesOrderRegistrySerializer
+    pagination_class = SalesOrderRegistryPagination
+
+    def get_queryset(self):
+        qs = (
+            SalesOrderItem.objects.select_related(
+                "order",
+                "order__customer",
+                "product",
+                "unit",
+            )
+            .all()
+        )
+        qs = apply_company_branch_scope(
+            request=self.request,
+            queryset=qs,
+            company_id_field="order__companyId_id",
+            branch_id_field="order__branch_id",
+        )
+        params = self.request.query_params
+        date_from = params.get("date_from")
+        if date_from:
+            qs = qs.filter(order__date__gte=date_from)
+        date_to = params.get("date_to")
+        if date_to:
+            qs = qs.filter(order__date__lte=date_to)
+        bill_number = params.get("bill_number")
+        if bill_number:
+            qs = qs.filter(order__bill_number__icontains=bill_number)
+        product_id = params.get("product")
+        if product_id:
+            qs = qs.filter(product_id=product_id)
+        customer_id = params.get("customer")
+        if customer_id:
+            qs = qs.filter(order__customer_id=customer_id)
+        total_amount_min = params.get("total_amount_min")
+        if total_amount_min:
+            qs = qs.filter(total__gte=total_amount_min)
+        total_amount_max = params.get("total_amount_max")
+        if total_amount_max:
+            qs = qs.filter(total__lte=total_amount_max)
+        return qs.order_by("-order__date", "-order__created_at")
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            data = self._build_rows(page)
+            return self.get_paginated_response(data)
+        data = self._build_rows(queryset)
+        return Response(data)
+
+    def _build_rows(self, items):
+        rows = []
+        for item in items:
+            order = item.order
+            product = item.product
+            rows.append(
+                {
+                    "id": item.id,
+                    "date": order.date,
+                    "bill_number": order.bill_number,
+                    "customer_name": order.customer.name if order.customer else "",
+                    "product_name": product.name if product else "",
+                    "unit_name": item.unit.name if item.unit else "",
+                    "quantity": item.qty or Decimal("0"),
+                    "mrp": product.mrp if product and product.mrp else Decimal("0"),
+                    "amount": item.amount or Decimal("0"),
+                    "tax_total": item.tax_amount or Decimal("0"),
+                    "total_amount": item.total or Decimal("0"),
+                }
+            )
+        return rows
+
+    @action(detail=False, methods=["get"])
+    def export(self, request):
+        queryset = self.filter_queryset(self.get_queryset())
+        items = queryset[:10000]
+        rows = self._build_rows(items)
+        import csv
+
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = (
+            'attachment; filename="sales_order_registry.csv"'
+        )
+        writer = csv.writer(response)
+        writer.writerow(
+            [
+                "Date",
+                "Bill Number",
+                "Customer",
+                "Product",
+                "Unit",
+                "Quantity",
+                "MRP",
+                "Amount",
+                "Tax Total",
+                "Total Amount",
+            ]
+        )
+        for row in rows:
+            writer.writerow(
+                [
+                    row["date"],
+                    row["bill_number"],
+                    row["customer_name"],
+                    row["product_name"],
+                    row["unit_name"],
+                    str(row["quantity"]),
+                    str(row["mrp"]),
+                    str(row["amount"]),
+                    str(row["tax_total"]),
+                    str(row["total_amount"]),
+                ]
+            )
+        return response

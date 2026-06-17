@@ -441,6 +441,9 @@ class ProductPostSerializer(serializers.ModelSerializer):
             unit_id = row.get("measuring_unit")
             if not unit_id:
                 continue
+            # Handle case where measuring_unit was deserialized into a Unit instance
+            if hasattr(unit_id, 'pk'):
+                unit_id = unit_id.pk
             if row_id:
                 try:
                     up = product.unit_prices.get(id=row_id)
@@ -526,12 +529,14 @@ class ProductPostSerializer(serializers.ModelSerializer):
 
     def to_internal_value(self, data):
         import json
-        if isinstance(data.get("unit_prices"), str):
+        if isinstance(data.get("product_units"), str):
             try:
-                data = data.copy()
-                data["unit_prices"] = json.loads(data["unit_prices"])
+                parsed_units = json.loads(data["product_units"])
+                # Build plain dict to avoid QueryDict.deepcopy issues with file uploads
+                data = dict(data.items())
+                data["product_units"] = parsed_units
             except (json.JSONDecodeError, TypeError):
-                raise serializers.ValidationError({"unit_prices": "Invalid JSON format"})
+                raise serializers.ValidationError({"product_units": "Invalid JSON format"})
         return super().to_internal_value(data)
     def create(self, validated_data):
         from django.db import transaction
@@ -594,6 +599,9 @@ class ProductPostSerializer(serializers.ModelSerializer):
             newLabel = NewLabel.objects.create(**newlabel_data)
             saleLabel = SaleLabel.objects.create(**salelabel_data)
 
+            # Upsert unit prices - must pop before Product.objects.create to avoid reverse relation assignment
+            unit_prices_data = validated_data.pop("unit_prices", None)
+
             # Create product with in_stock=0; signal will set it from StockSummary.
             product = Product.objects.create(
                 newLabel=newLabel, saleLabel=saleLabel, in_stock=0, **validated_data
@@ -601,8 +609,6 @@ class ProductPostSerializer(serializers.ModelSerializer):
 
             self._upsert_product_units(product, product_units_data)
 
-            # Upsert unit prices
-            unit_prices_data = validated_data.pop("unit_prices", None)
             if unit_prices_data is not None:
                 self._upsert_unit_prices(product, unit_prices_data)
 
@@ -662,6 +668,7 @@ class ProductPostSerializer(serializers.ModelSerializer):
         salelabel_data = validated_data.pop("saleLabel", None)
         variants_data = validated_data.pop("variants", None)
         product_units_data = validated_data.pop("product_units", None)
+        unit_prices_data = validated_data.pop("unit_prices", None)
 
         # Pop stock fields — stock is managed exclusively via StockSummary.
         # Product.in_stock is auto-recalculated by signal after StockSummary changes.
@@ -813,7 +820,6 @@ class ProductPostSerializer(serializers.ModelSerializer):
                 )
 
             self._upsert_product_units(instance, product_units_data)
-            unit_prices_data = validated_data.pop("unit_prices", None)
             if unit_prices_data is not None:
                 self._upsert_unit_prices(instance, unit_prices_data)
 

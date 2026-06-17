@@ -275,3 +275,17 @@ class SalesOrderWriteSerializer(serializers.ModelSerializer):
                 {"sales_person": "Sales Person is required."}
             )
         return attrs
+
+
+class SalesOrderRegistrySerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    date = serializers.DateField()
+    bill_number = serializers.CharField()
+    customer_name = serializers.CharField()
+    product_name = serializers.CharField()
+    unit_name = serializers.CharField()
+    quantity = serializers.DecimalField(max_digits=18, decimal_places=2)
+    mrp = serializers.DecimalField(max_digits=18, decimal_places=2)
+    amount = serializers.DecimalField(max_digits=18, decimal_places=2)
+    tax_total = serializers.DecimalField(max_digits=18, decimal_places=2)
+    total_amount = serializers.DecimalField(max_digits=18, decimal_places=2)

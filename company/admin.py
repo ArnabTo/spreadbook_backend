@@ -72,6 +72,8 @@ class CompanyAdmin(admin.ModelAdmin):
                     "company_website",
                     "company_title_line1",
                     "company_title_line2",
+                    "cr_number_en",
+                    "cr_number_ar",
                 )
             },
         ),
