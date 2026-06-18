@@ -1,5 +1,5 @@
 from rest_framework import viewsets, permissions, status
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
 from rest_framework.authentication import TokenAuthentication, SessionAuthentication
 
@@ -9,8 +9,8 @@ try:
 except ImportError:
     _JWT_AUTH = []
 
-from .models import SystemSettings
-from .serializers import SystemSettingsSerializer
+from .models import SystemSettings, Branding
+from .serializers import SystemSettingsSerializer, BrandingSerializer
 from common.drf_scoping import is_unrestricted_user
 
 
@@ -140,3 +140,20 @@ class SystemSettingsViewSet(viewsets.ModelViewSet):
                 return Response({"detail": "No settings found."}, status=status.HTTP_404_NOT_FOUND)
 
         return Response(self.get_serializer(obj).data)
+
+
+@api_view(["GET", "POST", "PATCH"])
+def branding_detail(request):
+    branding, _ = Branding.objects.get_or_create(pk=1)
+    if request.method == "GET":
+        return Response(BrandingSerializer(branding).data)
+    if not request.user.is_authenticated:
+        return Response(
+            {"error": "Authentication required"}, status=status.HTTP_401_UNAUTHORIZED
+        )
+    serializer = BrandingSerializer(
+        branding, data=request.data, partial=request.method == "PATCH"
+    )
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(serializer.data)

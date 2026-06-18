@@ -34,6 +34,7 @@ from rest_framework import generics
 from django.shortcuts import render
 
 from common.drf_scoping import is_unrestricted_user
+from settings.models import Branding
 from common.permissions import IsBranchManagerOrAbove
 
 
@@ -575,6 +576,8 @@ def megashop_login(request):
 
         # Prepare user data (matching frontend User interface)
         company_obj = user.companyId
+        branding = Branding.objects.filter(pk=1).first()
+        universal_logo = branding.logo.url if branding and branding.logo else None
         user_data = {
             "id": str(user.id),
             "username": user.username,
@@ -603,6 +606,7 @@ def megashop_login(request):
                 user.login_datetime.isoformat() if user.login_datetime else None
             ),
             "createdAt": user.created_at.isoformat() if user.created_at else None,
+            "universalLogo": universal_logo,
         }
 
         response_data = {
@@ -633,6 +637,8 @@ def get_user_profile(request):
 
     user = request.user
     company_obj = user.companyId
+    branding = Branding.objects.filter(pk=1).first()
+    universal_logo = branding.logo.url if branding and branding.logo else None
     user_data = {
         "id": str(user.id),
         "username": user.username,
@@ -659,6 +665,7 @@ def get_user_profile(request):
         "status": user.status or "active",
         "lastLogin": user.login_datetime.isoformat() if user.login_datetime else None,
         "createdAt": user.created_at.isoformat() if user.created_at else None,
+        "universalLogo": universal_logo,
     }
 
     return Response({"success": True, "user": user_data}, status=status.HTTP_200_OK)

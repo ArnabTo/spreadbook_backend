@@ -53,7 +53,7 @@ ROLE_CHOICE = (
     ("Accountant", "Accountant"),
     ("Quality Assurance Specialist", "Quality Assurance Specialist"),
     ("Customer Service Associate", "Customer Service Associate"),
-    ("Sales Representative", "Sales Representative"),
+    ("Sales", "Sales"),
     ("Operations Manager", "Operations Manager"),
     ("Marketing Director", "Marketing Director"),
     ("Customer", "Customer"),

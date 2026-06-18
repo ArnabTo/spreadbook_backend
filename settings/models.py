@@ -2,6 +2,22 @@ from django.db import models
 from django.utils.timezone import now
 
 
+class Branding(models.Model):
+    logo = models.ImageField(
+        upload_to="assets/uploads/branding/",
+        blank=True,
+        null=True,
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Branding"
+        verbose_name_plural = "Branding"
+
+    def __str__(self):
+        return "Branding Settings"
+
+
 class SystemSettings(models.Model):
     """
     Company- and optionally branch-scoped system settings.
